@@ -8,7 +8,7 @@ import tarfile
 import time
 import tkinter as tk
 import threading
-from tkinter import filedialog, ttk, messagebox
+from tkinter import filedialog, messagebox
 
 def is_archive(file_path):
     return (
@@ -69,6 +69,19 @@ def update_status(processed_files, total_files, start_time, status_label):
                    f"Time Left: {time.strftime('%H:%M:%S', time.gmtime(remaining_time))}")
     status_label.config(text=status_text)
 
+def save_seen_files(seen_files):
+
+    script_directory = os.path.dirname(os.path.realpath(__file__))  
+    seen_file = os.path.join(script_directory, 'seen_files.txt')
+    
+    try:
+        with open(seen_file, 'w') as f:
+            for file_hash, file_path in seen_files.items():
+                f.write(f"Hash: {file_hash} | Path: {file_path}\n")
+        print(f"Seen files written to {seen_file}")
+    except Exception as e:
+        print(f"Error saving seen files: {str(e)}")
+
 def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label):
 
     def extract_all_files():
@@ -81,7 +94,7 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                     if not os.path.exists(nested_extract_to):
                         os.makedirs(nested_extract_to)
 
-                    status_label.config(text=f"Currently extracting: {filename}")
+                    status_label.config(text=f"Currently extracting: {file_path}")
                     app.update_idletasks()
 
                     unpack_archive(file_path, nested_extract_to)
@@ -100,7 +113,7 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                 if not os.path.exists(nested_extract_to):
                     os.makedirs(nested_extract_to)
 
-                status_label.config(text=f"Currently extracting: {filename}")
+                status_label.config(text=f"Currently extracting: {file_path}")
                 app.update_idletasks()
 
                 unpack_archive(file_path, nested_extract_to)
@@ -116,25 +129,40 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                 try:
                     if extensions is None or filename.lower().endswith(extensions):
                         file_hash = hash_file(file_path)
-                        if file_hash in seen_files:
-                            if os.path.basename(file_path) != os.path.basename(seen_files[file_hash]):
-                                shutil.move(file_path, os.path.join(dest_folder, filename))
+                        file_size = os.path.getsize(file_path)
+                        if file_hash in seen_files and os.path.basename(file_path) == os.path.basename(seen_files[file_hash]):
+                            shutil.copy(file_path, os.path.join(dest_folder, filename))
                         else:
                             seen_files[file_hash] = file_path
                     else:
-                        shutil.move(file_path, os.path.join(unsupported_folder, filename))
+                        shutil.copy(file_path, os.path.join(unsupported_folder, filename))
                 except Exception as e:
                     log_error(f"Error processing file: {file_path}\n{str(e)}")
                     continue
 
                 processed_files += 1
                 update_status(processed_files, total_files, start_time, status_label)
+        
+        messagebox.showinfo("Info", "Duplicates copied. Review files in the destination folder before continuing.")
+        
+        save_seen_files(seen_files)
+
+        user_ready = messagebox.askyesno("Ready to Remove?", "Are you ready to remove duplicates from the source?")
+        if user_ready:
+            for filename in os.listdir(dest_folder):
+                duplicate_path = os.path.join(dest_folder, filename)
+                if os.path.isfile(duplicate_path):
+                    duplicate_hash = hash_file(duplicate_path) 
+                    
+                    if duplicate_hash in seen_files:
+                        original_file = seen_files[duplicate_hash] 
+                        os.remove(original_file) 
 
     try:
         extract_all_files()
         move_duplicates()
     finally:
-        print("finished execution")
+        messagebox.showinfo("Info", "Program finished running...")
 
 def select_folder(prompt):
     folder = filedialog.askdirectory(title=prompt)
@@ -145,16 +173,16 @@ def start_processing():
         
         #source_folder = select_folder('Select the folder to search for duplicates')
         #destination_folder = select_folder('Select the folder to move duplicates to')
-        #unsupported_folder = select_folder('Select the folder to move unsupported files to')
 
         source_folder = r'C:\Users\Jonas Henriksen\Desktop\TEST DUPLICATE REMOVER'
         destination_folder = r'C:\Users\Jonas Henriksen\Desktop\FOUND DUPLICATES'
-        unsupported_folder = r'C:\Users\Jonas Henriksen\Desktop\UNSUPPORTED FILES'
+        unsupported_folder = ''
 
-        if source_folder and destination_folder and unsupported_folder:
+        if source_folder and destination_folder:
 
             if media_var.get():
-                 file_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', 
+                #unsupported_folder = select_folder('Select the folder to move unsupported files to')
+                file_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', 
                    '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm')
             else:
                 file_extensions = None
@@ -177,7 +205,7 @@ media_checkbox.pack(pady=10)
 start_button = tk.Button(app, text="Start", command=start_processing)
 start_button.pack(pady=10)
 
-status_label = tk.Label(app, text="Progress: 0.00% | Elapsed Time: 00:00:00 | Time Left: 00:00:00")
+status_label = tk.Label(app, text="Progress: 0.00% | Elapsed Time: 00:00:00 | Time Left: 00:00:00", wraplength=350, justify="left")
 status_label.pack(pady=10)
 
 app.mainloop()
