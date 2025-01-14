@@ -7,6 +7,7 @@ import zipfile
 import tarfile
 import time
 import tkinter as tk
+import threading
 from tkinter import filedialog, ttk, messagebox
 
 def is_archive(file_path):
@@ -33,20 +34,22 @@ def unpack_archive(file_path, extract_to):
         elif file_path.lower().endswith('.rar'):
             with rarfile.RarFile(file_path, 'r') as archive:
                 archive.extractall(extract_to)
-
         return True
+    
     except Exception as e:
-        error_message = f"Failed to unpack archive: {file_path}\n{str(e)}"
-        
-        messagebox.showerror("Error", error_message)
-        
-        script_directory = os.path.dirname(os.path.realpath(__file__))  
-        log_file = os.path.join(script_directory, 'error_log.txt')
-
-        with open(log_file, 'a') as f:
-            f.write(f"{error_message}\n") 
-
+        log_error(f"Failed to unpack archive: {file_path}\n{str(e)}")
         return False
+
+
+def log_error(error_message):
+    messagebox.showerror("Error", error_message)
+        
+    script_directory = os.path.dirname(os.path.realpath(__file__))  
+    log_file = os.path.join(script_directory, 'error_log.txt')
+
+    with open(log_file, 'a') as f:
+        f.write(f"{error_message}\n") 
+
 
 def hash_file(file_path):
     hash_algo = hashlib.md5()
@@ -66,63 +69,72 @@ def update_status(processed_files, total_files, start_time, status_label):
                    f"Time Left: {time.strftime('%H:%M:%S', time.gmtime(remaining_time))}")
     status_label.config(text=status_text)
 
-def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label, total_files):
-    seen_files = {}
-    processed_files = 0
-    temp_extract_folder = os.path.join(root_folder, 'temp_extracted')
+def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label):
 
-    if not os.path.exists(temp_extract_folder):
-        os.makedirs(temp_extract_folder)
+    def extract_all_files():
+     for dirpath, _, filenames in os.walk(root_folder):
+        for filename in filenames:
+            file_path = os.path.join(dirpath, filename)
+            try:
+                if is_archive(file_path):
+                    nested_extract_to = os.path.join(root_folder, os.path.splitext(filename)[0])
+                    if not os.path.exists(nested_extract_to):
+                        os.makedirs(nested_extract_to)
 
-    start_time = time.time()
+                    status_label.config(text=f"Currently extracting: {filename}")
+                    app.update_idletasks()
 
-    def count_files_in_archive(extract_to):
-        count = 0
-        for _, _, filenames in os.walk(extract_to):
-            count += len(filenames)
-        return count
+                    unpack_archive(file_path, nested_extract_to)
+                    extract_all_files_in_folder(nested_extract_to)
 
-    try:
+            except Exception as e:
+                log_error(f"Error processing file: {file_path}\n{str(e)}")
+                continue
+
+    def extract_all_files_in_folder(folder):
+      for dirpath, _, filenames in os.walk(folder):
+        for filename in filenames:
+            file_path = os.path.join(dirpath, filename)
+            if is_archive(file_path):
+                nested_extract_to = os.path.join(folder, os.path.splitext(filename)[0])
+                if not os.path.exists(nested_extract_to):
+                    os.makedirs(nested_extract_to)
+
+                status_label.config(text=f"Currently extracting: {filename}")
+                app.update_idletasks()
+
+                unpack_archive(file_path, nested_extract_to)
+
+    def move_duplicates():
+        processed_files = 0
+        seen_files = {}
+        start_time = time.time()
+        total_files = sum([len(filenames) for _, _, filenames in os.walk(root_folder)])
         for dirpath, _, filenames in os.walk(root_folder):
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 try:
-                    if is_archive(file_path):
-                        nested_extract_to = os.path.join(temp_extract_folder, os.path.splitext(filename)[0])
-                        if not os.path.exists(nested_extract_to):
-                            os.makedirs(nested_extract_to)
-                        if unpack_archive(file_path, nested_extract_to):
-                            total_files += count_files_in_archive(nested_extract_to)  
-                            continue
-                    elif extensions is None or filename.lower().endswith(extensions):
+                    if extensions is None or filename.lower().endswith(extensions):
                         file_hash = hash_file(file_path)
                         if file_hash in seen_files:
-                            print("")
-                            shutil.move(file_path, os.path.join(dest_folder, filename))
+                            if os.path.basename(file_path) != os.path.basename(seen_files[file_hash]):
+                                shutil.move(file_path, os.path.join(dest_folder, filename))
                         else:
                             seen_files[file_hash] = file_path
                     else:
-                        print("")
                         shutil.move(file_path, os.path.join(unsupported_folder, filename))
-
                 except Exception as e:
-                    messagebox.showerror("Error", f"Error processing file: {file_path}\n{str(e)}")
+                    log_error(f"Error processing file: {file_path}\n{str(e)}")
                     continue
 
                 processed_files += 1
                 update_status(processed_files, total_files, start_time, status_label)
 
-        for dirpath, _, filenames in os.walk(temp_extract_folder):
-            for filename in filenames:
-                file_path = os.path.join(dirpath, filename)
-
+    try:
+        extract_all_files()
+        move_duplicates()
     finally:
-        print("finished extraction")
-        #shutil.rmtree(temp_extract_folder)
-
-
-def count_files(root_folder):
-    return sum(len(files) for _, _, files in os.walk(root_folder))
+        print("finished execution")
 
 def select_folder(prompt):
     folder = filedialog.askdirectory(title=prompt)
@@ -130,7 +142,6 @@ def select_folder(prompt):
 
 def start_processing():
     try:
-        
         
         #source_folder = select_folder('Select the folder to search for duplicates')
         #destination_folder = select_folder('Select the folder to move duplicates to')
@@ -141,7 +152,6 @@ def start_processing():
         unsupported_folder = r'C:\Users\Jonas Henriksen\Desktop\UNSUPPORTED FILES'
 
         if source_folder and destination_folder and unsupported_folder:
-            total_files = count_files(source_folder)
 
             if media_var.get():
                  file_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', 
@@ -149,14 +159,12 @@ def start_processing():
             else:
                 file_extensions = None
 
-            find_duplicates_and_move_non_media(
-                source_folder, destination_folder, unsupported_folder, 
-                file_extensions, status_label, total_files
-            )
+            threading.Thread(target=find_duplicates_and_move_non_media, args=(
+                source_folder, destination_folder, unsupported_folder, file_extensions, status_label)).start()
         else:
             messagebox.showerror("Error", "All folders must be selected.")
     except Exception as e:
-        messagebox.showerror("Error", str(e))
+        log_error(str(e))
 
 app = tk.Tk()
 app.title("Duplicate and Non-Media File Mover")
