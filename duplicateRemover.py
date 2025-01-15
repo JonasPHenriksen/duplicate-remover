@@ -9,6 +9,8 @@ import time
 import tkinter as tk
 import threading
 from tkinter import filedialog, messagebox
+from send2trash import send2trash
+import json
 
 def is_archive(file_path):
     return (
@@ -123,14 +125,14 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
         seen_files = {}
         start_time = time.time()
         total_files = sum([len(filenames) for _, _, filenames in os.walk(root_folder)])
+        threshold_size = int(size_entry.get()) * 1024
         for dirpath, _, filenames in os.walk(root_folder):
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 try:
                     if extensions is None or filename.lower().endswith(extensions):
                         file_hash = hash_file(file_path)
-                        file_size = os.path.getsize(file_path)
-                        if file_hash in seen_files and os.path.basename(file_path) == os.path.basename(seen_files[file_hash]):
+                        if threshold_size <= os.path.getsize(file_path) and file_hash in seen_files and os.path.basename(file_path) == os.path.basename(seen_files[file_hash]):
                             shutil.copy(file_path, os.path.join(dest_folder, filename))
                         else:
                             seen_files[file_hash] = file_path
@@ -162,7 +164,19 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
         extract_all_files()
         move_duplicates()
     finally:
-        messagebox.showinfo("Info", "Program finished running...")
+        try:
+            download_folder = os.path.expanduser("~/Downloads")
+            zip_path = os.path.join(download_folder, "archived_files.zip")
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for item in os.listdir(dest_folder):
+                    item_path = os.path.normpath(os.path.join(dest_folder, item))
+                    if os.path.isfile(item_path) or os.path.islink(item_path):
+                        zipf.write(item_path, os.path.basename(item_path))
+                        os.remove(item_path)
+            send2trash(os.path.normpath(zip_path))
+        except Exception as e:
+            log_error(f"Error clearing folder: {str(e)}")
+        messagebox.showinfo("Info", "Program finished running... files can be recovered from bin")
 
 def select_folder(prompt):
     folder = filedialog.askdirectory(title=prompt)
@@ -171,19 +185,16 @@ def select_folder(prompt):
 def start_processing():
     try:
         
-        #source_folder = select_folder('Select the folder to search for duplicates')
-        #destination_folder = select_folder('Select the folder to move duplicates to')
-
-        source_folder = r'C:\Users\Jonas Henriksen\Desktop\TEST DUPLICATE REMOVER'
-        destination_folder = r'C:\Users\Jonas Henriksen\Desktop\FOUND DUPLICATES'
+        source_folder = select_folder('Select the folder to search for duplicates')
+        destination_folder = select_folder('Select the folder to move duplicates to')
         unsupported_folder = ''
 
         if source_folder and destination_folder:
-
             if media_var.get():
-                #unsupported_folder = select_folder('Select the folder to move unsupported files to')
-                file_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', 
-                   '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm')
+                unsupported_folder = select_folder('Select the folder to move unsupported files to')
+                file_extensions = load_extensions('extensions.json')
+                if not file_extensions:
+                    messagebox.showerror("Error", "Failed to load file extensions.")
             else:
                 file_extensions = None
 
@@ -194,6 +205,15 @@ def start_processing():
     except Exception as e:
         log_error(str(e))
 
+def load_extensions(json_file):
+    try:
+        with open(json_file, 'r') as file:
+            data = json.load(file)
+            return tuple(data.get("file_extensions", []))
+    except Exception as e:
+        log_error(f"Error loading JSON file: {str(e)}")
+        return None
+
 app = tk.Tk()
 app.title("Duplicate and Non-Media File Mover")
 app.geometry('400x250')
@@ -201,6 +221,13 @@ app.geometry('400x250')
 media_var = tk.BooleanVar()
 media_checkbox = tk.Checkbutton(app, text="Filter media only", variable=media_var)
 media_checkbox.pack(pady=10)
+
+size_label = tk.Label(app, text="Enter file size threshold (KB):")
+size_label.pack(pady=10)
+
+size_entry = tk.Entry(app)
+size_entry.pack(pady=5)
+size_entry.insert(0, "0")
 
 start_button = tk.Button(app, text="Start", command=start_processing)
 start_button.pack(pady=10)

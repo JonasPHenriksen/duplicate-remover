@@ -1,4 +1,3 @@
 {
-    "ignore": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm"],
-    "unsupported": [".txt", ".docx", ".pdf", ".exe"]
+    "file_extensions": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm"]
 }
