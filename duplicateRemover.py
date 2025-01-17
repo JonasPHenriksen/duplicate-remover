@@ -9,7 +9,7 @@ import time
 import datetime
 import tkinter as tk
 import threading
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from send2trash import send2trash
 import json
 
@@ -45,8 +45,10 @@ def unpack_archive(file_path, extract_to, unsupported_dest):
         return False
 
 
-def log_error(error_message):
-    messagebox.showerror("Error", error_message)
+def log_error(error_message, error_show):
+
+    if error_show:
+        messagebox.showerror("Error", error_message)
         
     script_directory = os.path.dirname(os.path.realpath(__file__))  
     log_file = os.path.join(script_directory, 'error_log.txt')
@@ -93,7 +95,7 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 if not os.path.exists(file_path):
-                    log_error(f"File not found: {file_path}")
+                    log_error(f"File not found: {file_path}",True)
                     continue
                 try:
                     if is_archive(file_path):
@@ -106,13 +108,13 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                         try:
                             unpack_archive(file_path, nested_extract_to, unsupported_folder)
                         except Exception as e:
-                            log_error(f"Extraction failed: {file_path}\n{str(e)}")
+                            log_error(f"Extraction failed: {file_path}\n{str(e)}",True)
                             continue
 
                         extract_all_files_in_folder(nested_extract_to)
 
                 except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    log_error(f"Error processing file: {file_path}\n{str(e)}",True)
                     continue
 
     def extract_all_files_in_folder(folder):
@@ -120,7 +122,7 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 if not os.path.exists(file_path):
-                    log_error(f"File not found: {file_path}")
+                    log_error(f"File not found: {file_path}",True)
                     continue
                 try:
                     if is_archive(file_path):
@@ -133,55 +135,84 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                         try:
                             unpack_archive(file_path, nested_extract_to, unsupported_folder)
                         except Exception as e:
-                            log_error(f"Nested extraction failed: {file_path}\n{str(e)}")
+                            log_error(f"Nested extraction failed: {file_path}\n{str(e)}",True)
                             continue
 
                 except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    log_error(f"Error processing file: {file_path}\n{str(e)}",True)
                     continue
 
 
     def move_duplicates():
         processed_files = 0
         seen_files = {}
+        duplicates = {}
         start_time = time.time()
-        total_files = sum([len(filenames) for _, _, filenames in os.walk(root_folder)])
+        total_files = sum(len(filenames) for _, _, filenames in os.walk(root_folder))
         threshold_size = int(size_entry.get()) * 1024
+
         for dirpath, _, filenames in os.walk(root_folder):
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
                 try:
                     if extensions is None or filename.lower().endswith(extensions):
                         file_hash = hash_file(file_path)
-                        if threshold_size <= os.path.getsize(file_path) and file_hash in seen_files and os.path.basename(file_path) == os.path.basename(seen_files[file_hash]):
-                            shutil.copy(file_path, os.path.join(dest_folder, filename))
-                        else:
-                            seen_files[file_hash] = file_path
+                        if threshold_size <= os.path.getsize(file_path):
+                            if file_hash in seen_files:
+                                if file_hash not in duplicates:
+                                    duplicates[file_hash] = [seen_files[file_hash]]
+                                duplicates[file_hash].append(file_path)
+                            else:
+                                seen_files[file_hash] = file_path
                     else:
                         shutil.copy(file_path, os.path.join(unsupported_folder, filename))
                 except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    log_error(f"Error processing file: {file_path}\n{str(e)}",False)
                     processed_files += 1
                     update_status(processed_files, total_files, start_time, status_label)
                     continue
 
                 processed_files += 1
                 update_status(processed_files, total_files, start_time, status_label)
-        
-        messagebox.showinfo("Info", "Duplicates copied. Review files in the destination folder before continuing.")
-        
+
+        for file_hash, file_list in duplicates.items():
+            to_keep_indices = ask_user_which_to_keep_or_skip_multiple(file_list)
+            if to_keep_indices is not None:
+                to_keep_files = {file_list[i] for i in to_keep_indices}
+                for file_path in file_list:
+                    if file_path not in to_keep_files:
+                        send2trash(file_path)
+
+        messagebox.showinfo("Info", "Duplicate handling complete.")
         save_seen_files(seen_files)
 
-        user_ready = messagebox.askyesno("Ready to Remove?", "Are you ready to remove duplicates from the source?")
-        if user_ready:
-            for filename in os.listdir(dest_folder):
-                duplicate_path = os.path.join(dest_folder, filename)
-                if os.path.isfile(duplicate_path):
-                    duplicate_hash = hash_file(duplicate_path) 
-                    
-                    if duplicate_hash in seen_files:
-                        original_file = seen_files[duplicate_hash] 
-                        os.remove(original_file) 
+    def ask_user_which_to_keep_or_skip_multiple(file_list):
+        while True:
+            try:
+                newWin = tk.Tk()
+                newWin.withdraw()
+                print("Prompting user for input...")
+                file_options = "\n".join(f"{i + 1}: {path}" for i, path in enumerate(file_list))
+                choice = simpledialog.askstring(
+                    "Choose Files",
+                    f"Multiple files detected:\n{file_options}\n\n"
+                    "Enter the numbers of the files to keep (e.g., 1,4,7) or 0 to skip all:", parent=newWin
+                )
+                newWin.destroy()
+                if choice is None:
+                    return None
+                print(f"User choice: {choice}")
+                if choice == "0":
+                    return None
+                try:
+                    indices = [int(num.strip()) - 1 for num in choice.split(",")]
+                    if all(0 <= idx < len(file_list) for idx in indices):
+                        return indices
+                except ValueError:
+                    print("Invalid input detected.")
+                messagebox.showerror("Invalid Choice", "Please enter valid numbers or 0 to skip.")
+            except Exception as e:
+                log_error(f"Error: {str(e)}",True)
 
     try:
         extract_all_files()
@@ -200,7 +231,7 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                         os.remove(item_path)
             send2trash(os.path.normpath(zip_path))
         except Exception as e:
-            log_error(f"Error clearing folder: {str(e)}")
+            log_error(f"Error clearing folder: {str(e)}",True)
         messagebox.showinfo("Info", "Program finished running... files can be recovered from bin")
 
 def select_folder(prompt):
@@ -231,7 +262,7 @@ def start_processing():
         else:
             messagebox.showerror("Error", "All folders must be selected.")
     except Exception as e:
-        log_error(str(e))
+        log_error(str(e),True)
 
 def load_extensions(json_file):
     try:
@@ -239,7 +270,7 @@ def load_extensions(json_file):
             data = json.load(file)
             return tuple(data.get("file_extensions", []))
     except Exception as e:
-        log_error(f"Error loading JSON file: {str(e)}")
+        log_error(f"Error loading JSON file: {str(e)}",True)
         return None
 
 app = tk.Tk()
