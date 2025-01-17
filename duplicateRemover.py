@@ -75,19 +75,6 @@ def update_status(processed_files, total_files, start_time, status_label):
                    f"Time Left: {time.strftime('%H:%M:%S', time.gmtime(remaining_time))}")
     status_label.config(text=status_text)
 
-def save_seen_files(seen_files):
-
-    script_directory = os.path.dirname(os.path.realpath(__file__))  
-    seen_file = os.path.join(script_directory, 'seen_files.txt')
-    
-    try:
-        with open(seen_file, 'w') as f:
-            for file_hash, file_path in seen_files.items():
-                f.write(f"Hash: {file_hash} | Path: {file_path}\n")
-        print(f"Seen files written to {seen_file}")
-    except Exception as e:
-        print(f"Error saving seen files: {str(e)}")
-
 def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label):
 
     def extract_all_files():
@@ -142,7 +129,6 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                     log_error(f"Error processing file: {file_path}\n{str(e)}",True)
                     continue
 
-
     def move_duplicates():
         processed_files = 0
         seen_files = {}
@@ -165,7 +151,8 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                             else:
                                 seen_files[file_hash] = file_path
                     else:
-                        shutil.copy(file_path, os.path.join(unsupported_folder, filename))
+                        shutil.move(file_path, os.path.join(unsupported_folder, filename))
+                
                 except Exception as e:
                     log_error(f"Error processing file: {file_path}\n{str(e)}",False)
                     processed_files += 1
@@ -181,10 +168,12 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                 to_keep_files = {file_list[i] for i in to_keep_indices}
                 for file_path in file_list:
                     if file_path not in to_keep_files:
-                        send2trash(file_path)
+                        try:
+                            shutil.move(file_path, dest_folder)
+                        except Exception:
+                            send2trash(os.path.normpath(file_path))
 
         messagebox.showinfo("Info", "Duplicate handling complete.")
-        save_seen_files(seen_files)
 
     def ask_user_which_to_keep_or_skip_multiple(file_list):
         while True:
@@ -217,11 +206,12 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
     try:
         extract_all_files()
         move_duplicates()
+
     finally:
         try:
             download_folder = os.path.expanduser("~/Downloads")
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_name = f"archived_files_{timestamp}.zip"
+            zip_name = f"archived_duplicate_files_{timestamp}.zip"
             zip_path = os.path.join(download_folder, zip_name)
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for item in os.listdir(dest_folder):
@@ -241,13 +231,9 @@ def select_folder(prompt):
 def start_processing():
     try:
         
-        #source_folder = select_folder('Select the folder to search for duplicates')
-        #destination_folder = select_folder('Select the folder to move duplicates to')
-        #unsupported_folder = select_folder('Select the folder to move unsupported files/archives to')
-
-        source_folder = r'C:\Users\Jonas Henriksen\Desktop\TEST DUPLICATE REMOVER'
-        destination_folder = r'C:\Users\Jonas Henriksen\Desktop\FOUND DUPLICATES'
-        unsupported_folder = r'C:\Users\Jonas Henriksen\Desktop\UNSUPPORTED FILES'
+        source_folder = select_folder('Select the folder to search for duplicates')
+        destination_folder = select_folder('Select the folder to move duplicates to')
+        unsupported_folder = select_folder('Select the folder to move unsupported files/archives to')
 
         if source_folder and destination_folder:
             if media_var.get():
