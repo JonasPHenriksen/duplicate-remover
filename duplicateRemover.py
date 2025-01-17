@@ -6,6 +6,7 @@ import rarfile
 import zipfile
 import tarfile
 import time
+import datetime
 import tkinter as tk
 import threading
 from tkinter import filedialog, messagebox
@@ -17,9 +18,8 @@ def is_archive(file_path):
         file_path.lower().endswith(('.rar', '.7z', '.zip', '.tar'))    
     )
 
-def unpack_archive(file_path, extract_to):
+def unpack_archive(file_path, extract_to, unsupported_dest):
     try:
-
         file_path = file_path.strip()  
         file_path = os.path.abspath(file_path)  
         extract_to = os.path.abspath(extract_to)  
@@ -36,10 +36,12 @@ def unpack_archive(file_path, extract_to):
         elif file_path.lower().endswith('.rar'):
             with rarfile.RarFile(file_path, 'r') as archive:
                 archive.extractall(extract_to)
+        send2trash(file_path)
         return True
     
     except Exception as e:
         log_error(f"Failed to unpack archive: {file_path}\n{str(e)}")
+        shutil.move(file_path, unsupported_dest)
         return False
 
 
@@ -87,38 +89,57 @@ def save_seen_files(seen_files):
 def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label):
 
     def extract_all_files():
-     for dirpath, _, filenames in os.walk(root_folder):
-        for filename in filenames:
-            file_path = os.path.join(dirpath, filename)
-            try:
-                if is_archive(file_path):
-                    nested_extract_to = os.path.join(root_folder, os.path.splitext(filename)[0])
-                    if not os.path.exists(nested_extract_to):
-                        os.makedirs(nested_extract_to)
+        for dirpath, _, filenames in os.walk(root_folder):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if not os.path.exists(file_path):
+                    log_error(f"File not found: {file_path}")
+                    continue
+                try:
+                    if is_archive(file_path):
+                        nested_extract_to = os.path.join(dirpath, os.path.splitext(filename)[0])
+                        os.makedirs(nested_extract_to, exist_ok=True)
 
-                    status_label.config(text=f"Currently extracting: {file_path}")
-                    app.update_idletasks()
+                        status_label.config(text=f"Currently extracting: {file_path}")
+                        app.update_idletasks()
 
-                    unpack_archive(file_path, nested_extract_to)
-                    extract_all_files_in_folder(nested_extract_to)
+                        try:
+                            unpack_archive(file_path, nested_extract_to, unsupported_folder)
+                        except Exception as e:
+                            log_error(f"Extraction failed: {file_path}\n{str(e)}")
+                            continue
 
-            except Exception as e:
-                log_error(f"Error processing file: {file_path}\n{str(e)}")
-                continue
+                        extract_all_files_in_folder(nested_extract_to)
+
+                except Exception as e:
+                    log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    continue
 
     def extract_all_files_in_folder(folder):
-      for dirpath, _, filenames in os.walk(folder):
-        for filename in filenames:
-            file_path = os.path.join(dirpath, filename)
-            if is_archive(file_path):
-                nested_extract_to = os.path.join(folder, os.path.splitext(filename)[0])
-                if not os.path.exists(nested_extract_to):
-                    os.makedirs(nested_extract_to)
+        for dirpath, _, filenames in os.walk(folder):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if not os.path.exists(file_path):
+                    log_error(f"File not found: {file_path}")
+                    continue
+                try:
+                    if is_archive(file_path):
+                        nested_extract_to = os.path.join(dirpath, os.path.splitext(filename)[0])
+                        os.makedirs(nested_extract_to, exist_ok=True)
 
-                status_label.config(text=f"Currently extracting: {file_path}")
-                app.update_idletasks()
+                        status_label.config(text=f"Currently extracting: {file_path}")
+                        app.update_idletasks()
 
-                unpack_archive(file_path, nested_extract_to)
+                        try:
+                            unpack_archive(file_path, nested_extract_to, unsupported_folder)
+                        except Exception as e:
+                            log_error(f"Nested extraction failed: {file_path}\n{str(e)}")
+                            continue
+
+                except Exception as e:
+                    log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    continue
+
 
     def move_duplicates():
         processed_files = 0
@@ -140,6 +161,8 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
                         shutil.copy(file_path, os.path.join(unsupported_folder, filename))
                 except Exception as e:
                     log_error(f"Error processing file: {file_path}\n{str(e)}")
+                    processed_files += 1
+                    update_status(processed_files, total_files, start_time, status_label)
                     continue
 
                 processed_files += 1
@@ -166,7 +189,9 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
     finally:
         try:
             download_folder = os.path.expanduser("~/Downloads")
-            zip_path = os.path.join(download_folder, "archived_files.zip")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_name = f"archived_files_{timestamp}.zip"
+            zip_path = os.path.join(download_folder, zip_name)
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for item in os.listdir(dest_folder):
                     item_path = os.path.normpath(os.path.join(dest_folder, item))
@@ -185,13 +210,16 @@ def select_folder(prompt):
 def start_processing():
     try:
         
-        source_folder = select_folder('Select the folder to search for duplicates')
-        destination_folder = select_folder('Select the folder to move duplicates to')
-        unsupported_folder = ''
+        #source_folder = select_folder('Select the folder to search for duplicates')
+        #destination_folder = select_folder('Select the folder to move duplicates to')
+        #unsupported_folder = select_folder('Select the folder to move unsupported files/archives to')
+
+        source_folder = r'C:\Users\Jonas Henriksen\Desktop\TEST DUPLICATE REMOVER'
+        destination_folder = r'C:\Users\Jonas Henriksen\Desktop\FOUND DUPLICATES'
+        unsupported_folder = r'C:\Users\Jonas Henriksen\Desktop\UNSUPPORTED FILES'
 
         if source_folder and destination_folder:
             if media_var.get():
-                unsupported_folder = select_folder('Select the folder to move unsupported files to')
                 file_extensions = load_extensions('extensions.json')
                 if not file_extensions:
                     messagebox.showerror("Error", "Failed to load file extensions.")
