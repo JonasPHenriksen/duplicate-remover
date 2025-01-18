@@ -9,9 +9,10 @@ import time
 import datetime
 import tkinter as tk
 import threading
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog,Toplevel, Canvas, messagebox, simpledialog
 from send2trash import send2trash
 import json
+from PIL import Image, ImageTk
 
 def is_archive(file_path):
     return (
@@ -176,32 +177,52 @@ def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_fol
         messagebox.showinfo("Info", "Duplicate handling complete.")
 
     def ask_user_which_to_keep_or_skip_multiple(file_list):
+        
+        def show_preview(file_path):
+            if os.path.isfile(file_path):
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".ico"]:
+                    try:
+                        img = Image.open(file_path)
+                        img.thumbnail((300, 300))
+                        img = ImageTk.PhotoImage(img)
+                        canvas.create_image(150, 150, image=img)
+                        canvas.image = img
+                    except Exception as e:
+                        canvas.create_text(150, 150, text="Cannot preview image.")
+
         while True:
             try:
                 newWin = tk.Tk()
                 newWin.withdraw()
-                print("Prompting user for input...")
+
+                previewWin = Toplevel()
+                previewWin.title("Preview")
+                canvas = Canvas(previewWin, width=300, height=300)
+                canvas.pack()
+                show_preview(file_list[0])
+
                 file_options = "\n".join(f"{i + 1}: {path}" for i, path in enumerate(file_list))
                 choice = simpledialog.askstring(
                     "Choose Files",
                     f"Multiple files detected:\n{file_options}\n\n"
-                    "Enter the numbers of the files to keep (e.g., 1,4,7) or 0 to skip all:", parent=newWin
-                )
+                    "Enter the numbers of the files to keep (e.g., 1,4,7) or 0 to skip all:",
+                    parent=newWin
+                )                        
+                
                 newWin.destroy()
-                if choice is None:
+                previewWin.destroy()
+
+                if choice is None or choice == "0":
                     return None
-                print(f"User choice: {choice}")
-                if choice == "0":
-                    return None
-                try:
-                    indices = [int(num.strip()) - 1 for num in choice.split(",")]
-                    if all(0 <= idx < len(file_list) for idx in indices):
-                        return indices
-                except ValueError:
-                    print("Invalid input detected.")
-                messagebox.showerror("Invalid Choice", "Please enter valid numbers or 0 to skip.")
+                if choice.strip() == "*":
+                    return []
+                indices = [int(num.strip()) - 1 for num in choice.split(",")]
+                if all(0 <= idx < len(file_list) for idx in indices):
+                    return indices
             except Exception as e:
-                log_error(f"Error: {str(e)}",True)
+                messagebox.showerror("Error", str(e))
+
 
     try:
         extract_all_files()
