@@ -498,3 +498,41 @@ def test_archive_extraction_file_collision(temp_env):
     assert collision_file.is_file()
     assert (src / "data.json_1").is_dir()
     assert (src / "data.json_1" / "test.txt").exists()
+
+@patch('tkinter.messagebox.askyesno')
+@patch('tkinter.filedialog.askdirectory')
+def test_app_run_confirmation_cancel(mock_dir, mock_confirm, temp_env):
+    src, dst = temp_env
+    mock_dir.side_effect = [str(src), str(dst)]
+    
+    # User clicks "No" on the confirmation
+    mock_confirm.return_value = False
+    
+    root = tk.Tk()
+    app = CleanupApp(root)
+    
+    # Run the start logic
+    app.run()
+    
+    # Verify: The button should still be NORMAL because it never started
+    assert app.btn_run.cget("state") == "normal"
+    root.destroy()
+
+@patch('tkinter.messagebox.askyesno')
+@patch('tkinter.filedialog.askdirectory')
+def test_button_disables_during_run(mock_dir, mock_confirm, temp_env):
+    src, dst = temp_env
+    mock_dir.side_effect = [str(src), str(dst)]
+    mock_confirm.return_value = True
+    
+    root = tk.Tk()
+    app = CleanupApp(root)
+    
+    # We trigger run, which spawns the thread
+    app.run()
+    
+    # Check if button is disabled immediately after starting
+    assert app.btn_run.cget("state") == "disabled"
+    
+    # Clean up
+    root.destroy()

@@ -260,7 +260,9 @@ class CleanupApp:
         tk.Label(root, text="Auto-keep rule").pack(anchor="w")
         tk.OptionMenu(root, self.rule_var, "newest", "oldest", "shortest_path").pack(anchor="w")
 
-        tk.Button(root, text="Start cleanup", command=self.start).pack(pady=10)
+        self.is_running = False
+        self.btn_run = tk.Button(root, text="Start Cleanup", command=self.run)
+        self.btn_run.pack(pady=10)
 
         self.status = tk.Label(root, text="Idle", anchor="w")
         self.status.pack(fill="x", pady=5)
@@ -289,10 +291,26 @@ class CleanupApp:
         threading.Thread(target=self.run).start()
 
     def run(self):
+
+        if self.is_running:
+            return
+
         src = filedialog.askdirectory(title="Select source folder")
         dst = filedialog.askdirectory(title="Select destination folder")
+        
         if not src or not dst:
             return
+        
+        confirm = messagebox.askyesno(
+            "Confirm Operation",
+            f"Source: {src}\nDestination: {dst}\n\nAre you sure you want to proceed?"
+        )
+
+        if not confirm:
+            return
+        
+        self.is_running = True
+        self.btn_run.config(state=tk.DISABLED)
 
         config = ScanConfig(
             rule=self.rule_var.get(),
