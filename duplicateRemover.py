@@ -9,8 +9,9 @@ from tkinter import filedialog, messagebox, simpledialog
 from send2trash import send2trash
 import zipfile, tarfile, py7zr, rarfile
 from concurrent.futures import ThreadPoolExecutor
-
-# -------------------- config --------------------
+import tkinter.scrolledtext as st
+from tkinter import ttk
+from typing import Any, Optional
 
 EXCLUDE_DIRS = {
     ".git", ".svn", ".hg", "node_modules",
@@ -19,8 +20,6 @@ EXCLUDE_DIRS = {
 
 ARCHIVE_EXTS = (".zip", ".tar", ".7z", ".rar")
 CACHE_DB = "hash_cache.db"
-
-# -------------------- helpers --------------------
 
 def walk_filtered(root):
     for dirpath, dirnames, filenames in os.walk(root):
@@ -36,8 +35,6 @@ def auto_select_keep(paths, rule):
         return min(paths, key=len)
     return paths[0]
 
-# -------------------- config object --------------------
-
 class ScanConfig:
     def __init__(self, rule, ask, dry_run, expand_archives):
         self.rule = rule
@@ -45,11 +42,114 @@ class ScanConfig:
         self.dry_run = dry_run
         self.expand_archives = expand_archives
 
-# -------------------- hash cache --------------------
+class FileInfo:
+    def __init__(self, path, size, hash):
+        self.path = path
+        self.size = size
+        self.hash = hash
 
+class FolderInfo:
+    def __init__(self, path):
+        self.path = path
+        self.files = []       
+        self.subfolders = []  
+        self.signature = None
+
+class Mapper:
+    def __init__(self, cache, status_cb=None):
+        self.cache = cache
+        self.status_cb = status_cb or (lambda x: None)
+
+        self.files_by_hash = {}
+        self.folders_by_signature = {}
+        self.path_to_folder = {}
+        self.all_folders = []
+
+    def map_tree(self, root):
+        self._build_folder_tree(root)
+        self._index_files()
+        self._index_folders()
+
+    def _build_folder_tree(self, root):
+        for dirpath, dirnames, filenames in walk_filtered(root):
+            folder = FolderInfo(dirpath)
+            self.path_to_folder[dirpath] = folder
+            self.all_folders.append(folder)
+
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                try:
+                    size = os.path.getsize(path)
+                    hash = self.cache.hash_file(path)
+                    folder.files.append(FileInfo(path, size, hash))
+                except OSError:
+                    continue
+
+        for folder in self.all_folders:
+            parent = os.path.dirname(folder.path)
+            if parent in self.path_to_folder:
+                self.path_to_folder[parent].subfolders.append(folder)
+    
+    def _index_files(self):
+        for folder in self.all_folders:
+            for f in folder.files:
+                self.files_by_hash.setdefault(f.hash, []).append(f)
+    
+    def _folder_signature(self, folder):
+        entries = []
+
+        for root, _, files in os.walk(folder.path):
+            for name in files:
+                path = os.path.join(root, name)
+                try:
+                    size = os.path.getsize(path)
+                    h = self.cache.hash_file(path)
+                    rel = os.path.relpath(path, folder.path)
+                    entries.append((rel, h, size))
+                except OSError:
+                    continue
+
+        entries.sort()
+        total_size = sum(e[2] for e in entries)
+
+        return (len(entries), total_size, tuple(entries))
+    
+    def _index_folders(self):
+        sorted_folders = sorted(
+            self.all_folders, 
+            key=lambda f: f.path.count(os.sep), 
+            reverse=True
+        )
+
+        for folder in sorted_folders:
+            folder.signature = self._calculate_in_memory_signature(folder)
+            
+            self.folders_by_signature.setdefault(folder.signature, []).append(folder)
+
+    def _calculate_in_memory_signature(self, folder):
+
+        all_entries = []
+        
+        def collect_files(current_folder):
+            for f in current_folder.files:
+                rel = os.path.relpath(f.path, folder.path)
+                all_entries.append((rel, f.hash, f.size))
+            
+            for sub in current_folder.subfolders:
+                collect_files(sub)
+
+        collect_files(folder)
+
+        all_entries.sort()
+        
+        total_size = sum(e[2] for e in all_entries)
+        file_count = len(all_entries)
+        
+        return (file_count, total_size, tuple(all_entries))
+        
 class HashCache:
     def __init__(self, db_path=CACHE_DB):
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._init_db()
 
     def _init_db(self):
@@ -91,16 +191,21 @@ class HashCache:
     def close(self):
         self.conn.close()
 
-# -------------------- dedup engine --------------------
-
 class Deduplicator:
     def __init__(self, cache, config, status_cb=None):
         self.cache = cache
         self.config = config
         self.status_cb = status_cb or (lambda x: None)
+        self.resolved_paths = set()
 
     def _status(self, text):
         self.status_cb(text)
+
+    def _mark_resolved(self, folder):
+        for root, _, files in os.walk(folder.path):
+            self.resolved_paths.add(root)
+            for f in files:
+                self.resolved_paths.add(os.path.join(root, f))
 
     def expand_archives(self, root, max_depth=5):
             processed_paths = set()
@@ -149,227 +254,185 @@ class Deduplicator:
         except Exception:
             pass
 
-    def find_duplicate_folders(self, root):
-        seen = {}
-        duplicates = []
+    def resolve_folders_top_down(self, mapper, ask_fn, dest):
+        folders = sorted(
+            mapper.all_folders,
+            key=lambda f: f.path.count(os.sep)
+        )
 
-        for dirpath, dirnames, _ in walk_filtered(root):
-            for d in dirnames:
-                full = os.path.join(dirpath, d)
-                sig = self._folder_signature(full)
-                if sig in seen:
-                    duplicates.append([seen[sig], full])
-                else:
-                    seen[sig] = full
-        return duplicates
+        for folder in folders:
+            if folder.path in self.resolved_paths:
+                continue
 
-    def _folder_signature(self, folder):
-        total_size = 0
-        count = 0
-        structure = []
+            group = mapper.folders_by_signature.get(folder.signature, [])
+            if len(group) < 2:
+                continue
 
-        for root, _, files in os.walk(folder):
-            for f in files:
-                path = os.path.join(root, f)
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    continue
-                total_size += size
-                count += 1
-                structure.append(os.path.relpath(path, folder))
+            keep = ask_fn([f.path for f in group], is_folder=True)
+            if not keep:
+                continue
 
-        structure.sort()
-        return (os.path.basename(folder), count, total_size, tuple(structure))
+            for f in group:
+                self.resolved_paths.add(f.path)
+                if f.path != keep:
+                    self._mark_resolved(f)
+                    self._remove_path(f.path, dest)
 
-    def find_duplicate_files(self, root):
-        by_size = {}
-        for dirpath, _, filenames in walk_filtered(root):
-            for name in filenames:
-                path = os.path.join(dirpath, name)
-                try:
-                    size = os.path.getsize(path)
-                    by_size.setdefault(size, []).append(path)
-                except OSError:
-                    continue
+    def resolve_loose_files(self, mapper, ask_fn, dest):
+        for hash, files in mapper.files_by_hash.items():
+            loose = [
+                f for f in files
+                if f.path not in self.resolved_paths
+            ]
 
-        candidates = [f for f in by_size.values() if len(f) > 1]
-        total_to_hash = sum(len(g) for g in candidates)
-        processed_count = 0
+            if len(loose) < 2:
+                continue
+
+            keep = ask_fn([f.path for f in loose], is_folder=False)
+            if not keep:
+                continue
+
+            for f in loose:
+                if f.path != keep:
+                    self._remove_path(f.path, dest)
+    
+    def _remove_path(self, path, dest):
         
-        duplicates = []
-        for group in candidates:
-            hashes = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                results = list(executor.map(self.cache.hash_file, group))
-                
-            for f, h in zip(group, results):
-                processed_count += 1
-                self._status(f"Hashing: {os.path.basename(f)}", processed_count, total_to_hash)
-                if h:
-                    hashes.setdefault(h, []).append(f)
-                    
-            duplicates.extend(g for g in hashes.values() if len(g) > 1)
+        if self.config.dry_run:
+            print("[DRY RUN]", path)
+            return
+        
+        base = os.path.basename(path)
+        target = os.path.join(dest, base)
 
-        return duplicates
+        counter = 1
+        name, ext = os.path.splitext(base)
+        while os.path.exists(target):
+            target = os.path.join(dest, f"{name}_{counter}{ext}")
+            counter += 1
 
-    def resolve(self, groups, dest, ask_fn, is_folder=False):
-        for group in groups:
-            if self.config.ask:
-                keep = ask_fn(group, is_folder)
-                if not keep:
-                    continue
-            else:
-                keep = auto_select_keep(group, self.config.rule)
-
-            for p in group:
-                if p == keep:
-                    continue
-                if self.config.dry_run:
-                    print("[DRY RUN]", p)
-                    continue
-                
-                # IMPROVED LOGIC: Handle name collisions in Destination
-                base_name = os.path.basename(p)
-                final_dst = os.path.join(dest, base_name)
-                
-                counter = 1
-                name, ext = os.path.splitext(base_name)
-                while os.path.exists(final_dst):
-                    final_dst = os.path.join(dest, f"{name}_{counter}{ext}")
-                    counter += 1
-
-                try:
-                    shutil.move(p, final_dst)
-                except Exception as e:
-                    try:
-                        send2trash(p)
-                    except Exception as trash_err:
-                        print(f"[SKIP] Could not move or trash {p}: {trash_err}")
-                        continue
-
-# -------------------- UI --------------------
+        try:
+            shutil.move(path, target)
+        except Exception:
+            send2trash(path)
 
 class CleanupApp:
     def __init__(self, root):
         self.root = root
         root.title("Universal Deduplicator")
-        root.geometry("420x300")
+        root.geometry("600x500")
 
-        self.ask_var = tk.BooleanVar()
+        opt_frame = tk.Frame(root)
+        opt_frame.pack(fill="x", padx=10, pady=5)
+
+        self.ask_var = tk.BooleanVar(value=True)
         self.expand_var = tk.BooleanVar(value=True)
-        self.dry_var = tk.BooleanVar()
+        self.dry_var = tk.BooleanVar(value=False)
         self.rule_var = tk.StringVar(value="newest")
 
-        tk.Checkbutton(root, text="Expand archives", variable=self.expand_var).pack(anchor="w")
-        tk.Checkbutton(root, text="Ask before removing", variable=self.ask_var).pack(anchor="w")
-        tk.Checkbutton(root, text="Dry run", variable=self.dry_var).pack(anchor="w")
+        tk.Checkbutton(opt_frame, text="Expand archives", variable=self.expand_var).grid(row=0, column=0, sticky="w")
+        tk.Checkbutton(opt_frame, text="Ask before removing", variable=self.ask_var).grid(row=1, column=0, sticky="w")
+        tk.Checkbutton(opt_frame, text="Dry run (Log only)", variable=self.dry_var).grid(row=0, column=1, sticky="w")
 
-        tk.Label(root, text="Auto-keep rule").pack(anchor="w")
-        tk.OptionMenu(root, self.rule_var, "newest", "oldest", "shortest_path").pack(anchor="w")
+        tk.Label(opt_frame, text="Keep:").grid(row=1, column=1, sticky="e")
+        tk.OptionMenu(opt_frame, self.rule_var, "newest", "oldest", "shortest_path").grid(row=1, column=2, sticky="w")
+
+        self.progress = ttk.Progressbar(root, orient="horizontal", length=100, mode="determinate")
+        self.progress.pack(fill="x", padx=10, pady=5)
+
+        self.status = tk.Label(root, text="Ready", fg="blue")
+        self.status.pack(padx=10)
+
+        tk.Label(root, text="Activity Log:").pack(anchor="w", padx=10)
+        self.log_area = st.ScrolledText(root, height=15, font=("Consolas", 9))
+        self.log_area.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.is_running = False
-        self.btn_run = tk.Button(root, text="Start Cleanup", command=self.run)
+        self.btn_run = tk.Button(root, text="Start Cleanup", command=self.run, bg="#e1e1e1")
         self.btn_run.pack(pady=10)
 
-        self.status = tk.Label(root, text="Idle", anchor="w")
-        self.status.pack(fill="x", pady=5)
+    def log(self, message):
+        """Thread-safe logging to the UI."""
+        def append():
+            self.log_area.insert(tk.END, f"{message}\n")
+            self.log_area.see(tk.END) 
+        self.root.after(0, append)
 
-    def update_status(self, text):
-        self.root.after(0, lambda: self.status.config(text=text))
+    def update_status(self, text, progress_val=None):
+        def update():
+            self.status.config(text=text)
+            if progress_val is not None:
+                self.progress["value"] = progress_val
+        self.root.after(0, update)
 
     def ask_user(self, paths, is_folder):
-        result_container = [None]
+
+        result_container: list[Any] = [None] 
 
         def show_dialog():
-            title = "Duplicate folders" if is_folder else "Duplicate files"
-            text = "\n".join(f"{i+1}: {p}" for i, p in enumerate(paths))
-            res = simpledialog.askstring(
-                title,
-                f"{title} found:\n\n{text}\n\nEnter number to keep, or 0 to skip:",
-                parent=self.root
-            )
+            title = "Duplicate Found"
+            msg = "Pick one to KEEP (Enter number, or 0 to skip):\n\n"
+            msg += "\n".join(f"[{i+1}] {p}" for i, p in enumerate(paths))
+            res = simpledialog.askstring(title, msg, parent=self.root)
             result_container[0] = res if res is not None else "0"
 
         self.root.after(0, show_dialog)
-        
         while result_container[0] is None:
             time.sleep(0.1)
         
         choice = result_container[0]
-        if not choice or choice == "0":
-            return None
+        if choice == "0": return None
         try:
             idx = int(choice) - 1
-            if 0 <= idx < len(paths):
-                return paths[idx]
-        except ValueError:
-            pass
-        return None
-
-    def start(self):
-        threading.Thread(target=self.run).start()
+            return paths[idx] if 0 <= idx < len(paths) else None
+        except: return None
 
     def run(self):
-
-        if self.is_running:
-            return
+        if self.is_running: return
 
         src = filedialog.askdirectory(title="Select source folder")
         dst = filedialog.askdirectory(title="Select destination folder")
-        
-        if not src or not dst:
-            return
-        
-        confirm = messagebox.askyesno(
-            "Confirm Operation",
-            f"Source: {src}\nDestination: {dst}\n\nAre you sure you want to proceed?"
-        )
+        if not src or not dst: return
 
-        if not confirm:
-            return
-        
         self.is_running = True
         self.btn_run.config(state=tk.DISABLED)
+        self.log_area.delete('1.0', tk.END) 
 
         def task():
+            cache = None
             try:
-                config = ScanConfig(
-                    rule=self.rule_var.get(),
-                    ask=self.ask_var.get(),
-                    dry_run=self.dry_var.get(),
-                    expand_archives=self.expand_var.get(),
-                )
-
+                config = ScanConfig(self.rule_var.get(), self.ask_var.get(), self.dry_var.get(), self.expand_var.get())
                 cache = HashCache()
-                dedup = Deduplicator(cache, config, self.update_status)
+                dedup = Deduplicator(cache, config, self.log) 
 
-                start = time.time()
-
+                self.update_status("Starting...", 5)
+                
                 if config.expand_archives:
-                    self.update_status("Expanding archives...")
+                    self.log(">>> Extracting Archives...")
                     dedup.expand_archives(src)
+                
+                self.update_status("Mapping files...", 30)
+                mapper = Mapper(cache, self.log)
+                mapper.map_tree(src)
 
-                self.update_status("Finding duplicate folders...")
-                folders = dedup.find_duplicate_folders(src)
-                dedup.resolve(folders, dst, self.ask_user, is_folder=True)
+                self.update_status("Analyzing Folders...", 60)
+                dedup.resolve_folders_top_down(mapper, self.ask_user, dst)
 
-                self.update_status("Finding duplicate files...")
-                files = dedup.find_duplicate_files(src)
-                dedup.resolve(files, dst, self.ask_user, is_folder=False)
+                self.update_status("Analyzing Files...", 80)
+                dedup.resolve_loose_files(mapper, self.ask_user, dst)
 
-                cache.close()
-
-                elapsed = time.time() - start
-                self.update_status(f"Done in {elapsed:.1f}s")
-                messagebox.showinfo("Finished", "Cleanup completed")
+                self.update_status("Complete!", 100)
+                self.log("--- FINISHED ---")
+                messagebox.showinfo("Done", "Cleanup process finished.")
+            except Exception as e:
+                self.log(f"ERROR: {str(e)}")
             finally:
+                if cache is not None:
+                    cache.close()
                 self.is_running = False
                 self.root.after(0, lambda: self.btn_run.config(state=tk.NORMAL))
 
-        threading.Thread(target=task).start()
-
-# -------------------- run --------------------
+        threading.Thread(target=task, daemon=True).start()
 
 if __name__ == "__main__":
     root = tk.Tk()
