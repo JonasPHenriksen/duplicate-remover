@@ -15,15 +15,26 @@ from typing import Any
 EXCLUDE_DIRS = {
     ".git", ".svn", ".hg", "node_modules",
     "__pycache__", ".venv", "venv",
+    "proc", "dev", "sys", "run", "var"
 }
 
 ARCHIVE_EXTS = (".zip", ".tar", ".7z", ".rar")
 CACHE_DB = "hash_cache.db"
 
 def walk_filtered(root):
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
-        yield dirpath, dirnames, filenames
+        
+        valid_files = []
+        for f in filenames:
+            path = os.path.join(dirpath, f)
+            
+            if not os.path.isfile(path) or os.path.islink(path):
+                continue
+                
+            valid_files.append(f)
+            
+        yield dirpath, dirnames, valid_files
 
 def auto_select_keep(paths, rule):
     if rule == "newest":
