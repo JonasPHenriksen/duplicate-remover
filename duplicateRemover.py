@@ -1,304 +1,309 @@
 import os
 import hashlib
 import shutil
-import py7zr
-import rarfile
-import zipfile
-import tarfile
-import time
-import datetime
-import tkinter as tk
+import sqlite3
 import threading
-from tkinter import filedialog,Toplevel, Canvas, messagebox, simpledialog
+import time
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 from send2trash import send2trash
-import json
-from PIL import Image, ImageTk
+import zipfile, tarfile, py7zr, rarfile
 
-def is_archive(file_path):
-    return (
-        file_path.lower().endswith(('.rar', '.7z', '.zip', '.tar'))    
-    )
+# -------------------- config --------------------
 
-def unpack_archive(file_path, extract_to, unsupported_dest):
-    try:
-        file_path = file_path.strip()  
-        file_path = os.path.abspath(file_path)  
-        extract_to = os.path.abspath(extract_to)  
+EXCLUDE_DIRS = {
+    ".git", ".svn", ".hg", "node_modules",
+    "__pycache__", ".venv", "venv",
+}
 
-        if zipfile.is_zipfile(file_path):
-            with zipfile.ZipFile(file_path, 'r') as archive:
-                archive.extractall(extract_to)
-        elif tarfile.is_tarfile(file_path):
-            with tarfile.open(file_path, 'r') as archive:
-                archive.extractall(extract_to)
-        elif file_path.lower().endswith('.7z'):
-            with py7zr.SevenZipFile(file_path, mode='r') as archive:
-                archive.extractall(extract_to)
-        elif file_path.lower().endswith('.rar'):
-            with rarfile.RarFile(file_path, 'r') as archive:
-                archive.extractall(extract_to)
-        send2trash(file_path)
-        return True
-    
-    except Exception as e:
-        log_error(f"Failed to unpack archive: {file_path}\n{str(e)}")
-        shutil.move(file_path, unsupported_dest)
-        return False
+ARCHIVE_EXTS = (".zip", ".tar", ".7z", ".rar")
+CACHE_DB = "hash_cache.db"
 
+# -------------------- helpers --------------------
 
-def log_error(error_message, error_show):
+def walk_filtered(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        yield dirpath, dirnames, filenames
 
-    if error_show:
-        messagebox.showerror("Error", error_message)
-        
-    script_directory = os.path.dirname(os.path.realpath(__file__))  
-    log_file = os.path.join(script_directory, 'error_log.txt')
+def auto_select_keep(paths, rule):
+    if rule == "newest":
+        return max(paths, key=os.path.getmtime)
+    if rule == "oldest":
+        return min(paths, key=os.path.getmtime)
+    if rule == "shortest_path":
+        return min(paths, key=len)
+    return paths[0]
 
-    with open(log_file, 'a') as f:
-        f.write(f"{error_message}\n") 
+# -------------------- config object --------------------
 
+class ScanConfig:
+    def __init__(self, rule, ask, dry_run, expand_archives):
+        self.rule = rule
+        self.ask = ask
+        self.dry_run = dry_run
+        self.expand_archives = expand_archives
 
-def hash_file(file_path):
-    hash_algo = hashlib.md5()
-    with open(file_path, 'rb') as f:
-        while chunk := f.read(8192):
-            hash_algo.update(chunk)
-    return hash_algo.hexdigest()
+# -------------------- hash cache --------------------
 
-def update_status(processed_files, total_files, start_time, status_label):
-    percentage = (processed_files / total_files) * 100
-    elapsed_time = time.time() - start_time
-    estimated_total_time = (elapsed_time / processed_files) * total_files if processed_files > 0 else 0
-    remaining_time = max(estimated_total_time - elapsed_time, 0)
+class HashCache:
+    def __init__(self, db_path=CACHE_DB):
+        self.conn = sqlite3.connect(db_path)
+        self._init_db()
 
-    status_text = (f"Progress: {percentage:.2f}% | "
-                   f"Elapsed Time: {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))} | "
-                   f"Time Left: {time.strftime('%H:%M:%S', time.gmtime(remaining_time))}")
-    status_label.config(text=status_text)
+    def _init_db(self):
+        cur = self.conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS file_hashes (
+                path TEXT PRIMARY KEY,
+                size INTEGER,
+                mtime REAL,
+                hash TEXT
+            )
+        """)
+        self.conn.commit()
 
-def find_duplicates_and_move_non_media(root_folder, dest_folder, unsupported_folder, extensions, status_label):
+    def hash_file(self, path):
+        size = os.path.getsize(path)
+        mtime = os.path.getmtime(path)
 
-    def extract_all_files():
-        for dirpath, _, filenames in os.walk(root_folder):
-            for filename in filenames:
-                file_path = os.path.join(dirpath, filename)
-                if not os.path.exists(file_path):
-                    log_error(f"File not found: {file_path}",True)
-                    continue
-                try:
-                    if is_archive(file_path):
-                        nested_extract_to = os.path.join(dirpath, os.path.splitext(filename)[0])
-                        os.makedirs(nested_extract_to, exist_ok=True)
+        cur = self.conn.cursor()
+        cur.execute("SELECT hash, size, mtime FROM file_hashes WHERE path=?", (path,))
+        row = cur.fetchone()
 
-                        status_label.config(text=f"Currently extracting: {file_path}")
-                        app.update_idletasks()
+        if row and row[1] == size and row[2] == mtime:
+            return row[0]
 
-                        try:
-                            unpack_archive(file_path, nested_extract_to, unsupported_folder)
-                        except Exception as e:
-                            log_error(f"Extraction failed: {file_path}\n{str(e)}",True)
-                            continue
+        h = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
 
-                        extract_all_files_in_folder(nested_extract_to)
+        digest = h.hexdigest()
+        cur.execute(
+            "REPLACE INTO file_hashes VALUES (?, ?, ?, ?)",
+            (path, size, mtime, digest),
+        )
+        self.conn.commit()
+        return digest
 
-                except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}",True)
-                    continue
+    def close(self):
+        self.conn.close()
 
-    def extract_all_files_in_folder(folder):
-        for dirpath, _, filenames in os.walk(folder):
-            for filename in filenames:
-                file_path = os.path.join(dirpath, filename)
-                if not os.path.exists(file_path):
-                    log_error(f"File not found: {file_path}",True)
-                    continue
-                try:
-                    if is_archive(file_path):
-                        nested_extract_to = os.path.join(dirpath, os.path.splitext(filename)[0])
-                        os.makedirs(nested_extract_to, exist_ok=True)
+# -------------------- dedup engine --------------------
 
-                        status_label.config(text=f"Currently extracting: {file_path}")
-                        app.update_idletasks()
+class Deduplicator:
+    def __init__(self, cache, config, status_cb=None):
+        self.cache = cache
+        self.config = config
+        self.status_cb = status_cb or (lambda x: None)
 
-                        try:
-                            unpack_archive(file_path, nested_extract_to, unsupported_folder)
-                        except Exception as e:
-                            log_error(f"Nested extraction failed: {file_path}\n{str(e)}",True)
-                            continue
+    def _status(self, text):
+        self.status_cb(text)
 
-                except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}",True)
-                    continue
+    def expand_archives(self, root):
+        for dirpath, _, filenames in walk_filtered(root):
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                if path.lower().endswith(ARCHIVE_EXTS):
+                    dest = os.path.join(dirpath, os.path.splitext(name)[0])
+                    os.makedirs(dest, exist_ok=True)
+                    self._unpack(path, dest)
 
-    def move_duplicates():
-        processed_files = 0
-        seen_files = {}
-        duplicates = {}
-        start_time = time.time()
-        total_files = sum(len(filenames) for _, _, filenames in os.walk(root_folder))
-        threshold_size = int(size_entry.get()) * 1024
-
-        for dirpath, _, filenames in os.walk(root_folder):
-            for filename in filenames:
-                file_path = os.path.join(dirpath, filename)
-                try:
-                    if extensions is None or filename.lower().endswith(extensions):
-                        file_hash = hash_file(file_path)
-                        if threshold_size <= os.path.getsize(file_path):
-                            if file_hash in seen_files:
-                                if file_hash not in duplicates:
-                                    duplicates[file_hash] = [seen_files[file_hash]]
-                                duplicates[file_hash].append(file_path)
-                            else:
-                                seen_files[file_hash] = file_path
-                    else:
-                        shutil.move(file_path, os.path.join(unsupported_folder, filename))
-                
-                except Exception as e:
-                    log_error(f"Error processing file: {file_path}\n{str(e)}",False)
-                    processed_files += 1
-                    update_status(processed_files, total_files, start_time, status_label)
-                    continue
-
-                processed_files += 1
-                update_status(processed_files, total_files, start_time, status_label)
-
-        for file_hash, file_list in duplicates.items():
-            to_keep_indices = ask_user_which_to_keep_or_skip_multiple(file_list)
-            if to_keep_indices is not None:
-                to_keep_files = {file_list[i] for i in to_keep_indices}
-                for file_path in file_list:
-                    if file_path not in to_keep_files:
-                        try:
-                            shutil.move(file_path, dest_folder)
-                        except Exception:
-                            send2trash(os.path.normpath(file_path))
-
-        messagebox.showinfo("Info", "Duplicate handling complete.")
-
-    def ask_user_which_to_keep_or_skip_multiple(file_list):
-        
-        def show_preview(file_path):
-            if os.path.isfile(file_path):
-                ext = os.path.splitext(file_path)[1].lower()
-                if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".ico"]:
-                    try:
-                        img = Image.open(file_path)
-                        img.thumbnail((300, 300))
-                        img = ImageTk.PhotoImage(img)
-                        canvas.create_image(150, 150, image=img)
-                        canvas.image = img
-                    except Exception as e:
-                        canvas.create_text(150, 150, text="Cannot preview image.")
-
-        while True:
-            try:
-                newWin = tk.Tk()
-                newWin.withdraw()
-
-                previewWin = Toplevel()
-                previewWin.title("Preview")
-                canvas = Canvas(previewWin, width=300, height=300)
-                canvas.pack()
-                show_preview(file_list[0])
-
-                file_options = "\n".join(f"{i + 1}: {path}" for i, path in enumerate(file_list))
-                choice = simpledialog.askstring(
-                    "Choose Files",
-                    f"Multiple files detected:\n{file_options}\n\n"
-                    "Enter the numbers of the files to keep (e.g., 1,4,7) or 0 to skip all:",
-                    parent=newWin
-                )                        
-                
-                newWin.destroy()
-                previewWin.destroy()
-
-                if choice is None or choice == "0":
-                    return None
-                if choice.strip() == "*":
-                    return []
-                indices = [int(num.strip()) - 1 for num in choice.split(",")]
-                if all(0 <= idx < len(file_list) for idx in indices):
-                    return indices
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-
-
-    try:
-        extract_all_files()
-        move_duplicates()
-
-    finally:
+    def _unpack(self, path, dest):
+        ext = os.path.splitext(path)[1].lower()
         try:
-            download_folder = os.path.expanduser("~/Downloads")
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_name = f"archived_duplicate_files_{timestamp}.zip"
-            zip_path = os.path.join(download_folder, zip_name)
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for item in os.listdir(dest_folder):
-                    item_path = os.path.normpath(os.path.join(dest_folder, item))
-                    if os.path.isfile(item_path) or os.path.islink(item_path):
-                        zipf.write(item_path, os.path.basename(item_path))
-                        os.remove(item_path)
-            send2trash(os.path.normpath(zip_path))
-        except Exception as e:
-            log_error(f"Error clearing folder: {str(e)}",True)
-        messagebox.showinfo("Info", "Program finished running... files can be recovered from bin")
+            if ext == ".zip":
+                with zipfile.ZipFile(path) as z: z.extractall(dest)
+            elif ext == ".tar":
+                with tarfile.open(path) as t: t.extractall(dest)
+            elif ext == ".7z":
+                with py7zr.SevenZipFile(path) as z: z.extractall(dest)
+            elif ext == ".rar":
+                with rarfile.RarFile(path) as r: r.extractall(dest)
+            send2trash(path)
+        except Exception:
+            pass
 
-def select_folder(prompt):
-    folder = filedialog.askdirectory(title=prompt)
-    return folder
+    def find_duplicate_folders(self, root):
+        seen = {}
+        duplicates = []
 
-def start_processing():
-    try:
-        
-        source_folder = select_folder('Select the folder to search for duplicates')
-        destination_folder = select_folder('Select the folder to move duplicates to')
-        unsupported_folder = select_folder('Select the folder to move unsupported files/archives to')
+        for dirpath, dirnames, _ in walk_filtered(root):
+            for d in dirnames:
+                full = os.path.join(dirpath, d)
+                sig = self._folder_signature(full)
+                if sig in seen:
+                    duplicates.append([seen[sig], full])
+                else:
+                    seen[sig] = full
+        return duplicates
 
-        if source_folder and destination_folder:
-            if media_var.get():
-                file_extensions = load_extensions('extensions.json')
-                if not file_extensions:
-                    messagebox.showerror("Error", "Failed to load file extensions.")
+    def _folder_signature(self, folder):
+        total_size = 0
+        count = 0
+        structure = []
+
+        for root, _, files in os.walk(folder):
+            for f in files:
+                path = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                total_size += size
+                count += 1
+                structure.append(os.path.relpath(path, folder))
+
+        structure.sort()
+        return (os.path.basename(folder), count, total_size, tuple(structure))
+
+    def find_duplicate_files(self, root):
+        by_size = {}
+
+        for dirpath, _, filenames in walk_filtered(root):
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                by_size.setdefault(size, []).append(path)
+
+        duplicates = []
+        for files in by_size.values():
+            if len(files) < 2:
+                continue
+            hashes = {}
+            for f in files:
+                h = self.cache.hash_file(f)
+                hashes.setdefault(h, []).append(f)
+            duplicates.extend(g for g in hashes.values() if len(g) > 1)
+
+        return duplicates
+
+    def resolve(self, groups, dest, ask_fn, is_folder=False):
+        for group in groups:
+            if self.config.ask:
+                keep = ask_fn(group, is_folder)
+                if not keep:
+                    continue
             else:
-                file_extensions = None
+                keep = auto_select_keep(group, self.config.rule)
 
-            threading.Thread(target=find_duplicates_and_move_non_media, args=(
-                source_folder, destination_folder, unsupported_folder, file_extensions, status_label)).start()
-        else:
-            messagebox.showerror("Error", "All folders must be selected.")
-    except Exception as e:
-        log_error(str(e),True)
+            for p in group:
+                if p == keep:
+                    continue
+                if self.config.dry_run:
+                    print("[DRY RUN]", p)
+                    continue
+                
+                # IMPROVED LOGIC: Handle name collisions in Destination
+                base_name = os.path.basename(p)
+                final_dst = os.path.join(dest, base_name)
+                
+                counter = 1
+                name, ext = os.path.splitext(base_name)
+                while os.path.exists(final_dst):
+                    final_dst = os.path.join(dest, f"{name}_{counter}{ext}")
+                    counter += 1
 
-def load_extensions(json_file):
-    try:
-        with open(json_file, 'r') as file:
-            data = json.load(file)
-            return tuple(data.get("file_extensions", []))
-    except Exception as e:
-        log_error(f"Error loading JSON file: {str(e)}",True)
+                try:
+                    shutil.move(p, final_dst)
+                except Exception:
+                    # Fallback to trash if move fails for other reasons
+                    try:
+                        send2trash(p)
+                    except Exception:
+                        os.remove(p) # Final fallback: permanent delete
+
+# -------------------- UI --------------------
+
+class CleanupApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Universal Deduplicator")
+        root.geometry("420x300")
+
+        self.ask_var = tk.BooleanVar()
+        self.expand_var = tk.BooleanVar(value=True)
+        self.dry_var = tk.BooleanVar()
+        self.rule_var = tk.StringVar(value="newest")
+
+        tk.Checkbutton(root, text="Expand archives", variable=self.expand_var).pack(anchor="w")
+        tk.Checkbutton(root, text="Ask before removing", variable=self.ask_var).pack(anchor="w")
+        tk.Checkbutton(root, text="Dry run", variable=self.dry_var).pack(anchor="w")
+
+        tk.Label(root, text="Auto-keep rule").pack(anchor="w")
+        tk.OptionMenu(root, self.rule_var, "newest", "oldest", "shortest_path").pack(anchor="w")
+
+        tk.Button(root, text="Start cleanup", command=self.start).pack(pady=10)
+
+        self.status = tk.Label(root, text="Idle", anchor="w")
+        self.status.pack(fill="x", pady=5)
+
+    def update_status(self, text):
+        self.root.after(0, lambda: self.status.config(text=text))
+
+    def ask_user(self, paths, is_folder):
+        title = "Duplicate folders" if is_folder else "Duplicate files"
+        text = "\n".join(f"{i+1}: {p}" for i, p in enumerate(paths))
+        choice = simpledialog.askstring(
+            title,
+            f"{title} found:\n\n{text}\n\nEnter number to keep, or 0 to skip:"
+        )
+        if not choice or choice == "0":
+            return None
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(paths):
+                return paths[idx]
+        except ValueError:
+            pass
         return None
 
-app = tk.Tk()
-app.title("Duplicate and Non-Media File Mover")
-app.geometry('400x250')
+    def start(self):
+        threading.Thread(target=self.run).start()
 
-media_var = tk.BooleanVar()
-media_checkbox = tk.Checkbutton(app, text="Filter media only", variable=media_var)
-media_checkbox.pack(pady=10)
+    def run(self):
+        src = filedialog.askdirectory(title="Select source folder")
+        dst = filedialog.askdirectory(title="Select destination folder")
+        if not src or not dst:
+            return
 
-size_label = tk.Label(app, text="Enter file size threshold (KB):")
-size_label.pack(pady=10)
+        config = ScanConfig(
+            rule=self.rule_var.get(),
+            ask=self.ask_var.get(),
+            dry_run=self.dry_var.get(),
+            expand_archives=self.expand_var.get(),
+        )
 
-size_entry = tk.Entry(app)
-size_entry.pack(pady=5)
-size_entry.insert(0, "0")
+        cache = HashCache()
+        dedup = Deduplicator(cache, config, self.update_status)
 
-start_button = tk.Button(app, text="Start", command=start_processing)
-start_button.pack(pady=10)
+        start = time.time()
 
-status_label = tk.Label(app, text="Progress: 0.00% | Elapsed Time: 00:00:00 | Time Left: 00:00:00", wraplength=350, justify="left")
-status_label.pack(pady=10)
+        if config.expand_archives:
+            self.update_status("Expanding archives...")
+            dedup.expand_archives(src)
 
-app.mainloop()
+        self.update_status("Finding duplicate folders...")
+        folders = dedup.find_duplicate_folders(src)
+        dedup.resolve(folders, dst, self.ask_user, is_folder=True)
+
+        self.update_status("Finding duplicate files...")
+        files = dedup.find_duplicate_files(src)
+        dedup.resolve(files, dst, self.ask_user, is_folder=False)
+
+        cache.close()
+
+        elapsed = time.time() - start
+        self.update_status(f"Done in {elapsed:.1f}s")
+        messagebox.showinfo("Finished", "Cleanup completed")
+
+# -------------------- run --------------------
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CleanupApp(root)
+    root.mainloop()
