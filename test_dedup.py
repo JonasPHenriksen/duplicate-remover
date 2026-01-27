@@ -1,7 +1,9 @@
 import pytest
 import os
-from duplicateRemover import Deduplicator, ScanConfig, HashCache
+from duplicateRemover import Deduplicator, ScanConfig, HashCache, CleanupApp
 import zipfile, tarfile, py7zr, rarfile
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 
 @pytest.fixture
 def temp_env(tmp_path):
@@ -268,3 +270,147 @@ def test_multiple_duplicates(temp_env):
     
     assert len(src_remaining) == 1
     assert len(dst_moved) == 2
+
+from unittest.mock import patch
+
+def test_app_run_trigger(temp_env):
+    src, dst = temp_env
+    with patch('tkinter.filedialog.askdirectory') as mock_dir:
+        # Mocking the folder selection
+        mock_dir.side_effect = [str(src), str(dst)]
+        
+        root = tk.Tk()
+        app = CleanupApp(root)
+        
+        # Manually trigger the core logic function
+        # We skip the thread for testing purposes
+        app.run() 
+        root.update()
+        root.destroy()
+
+def test_unpack_all_formats(temp_env):
+    src, dst = temp_env
+    config = ScanConfig("newest", False, False, True)
+    dedup = Deduplicator(HashCache(":memory:"), config)
+    
+    # We create fake files with these extensions to trigger the if/elif branches
+    formats = [".zip", ".tar", ".7z", ".rar"]
+    for ext in formats:
+        fake_archive = src / f"test{ext}"
+        fake_archive.write_bytes(b"not a real archive")
+        # This will trigger the specific elif and then hit the 'except Exception'
+        # which covers both the extraction attempt and the error handling.
+        dedup._unpack(str(fake_archive), str(src / "extracted"))
+
+@patch('duplicateRemover.send2trash')
+@patch('shutil.move')
+def test_resolution_final_fallback(mock_move, mock_trash, temp_env):
+    src, dst = temp_env
+    f1 = src / "stay.txt"
+    f2 = src / "gone.txt"
+    f1.write_bytes(b"data")
+    f2.write_bytes(b"data")
+
+    # Force move and trash to fail to reach the os.remove(p) line
+    mock_move.side_effect = Exception("Move failed")
+    mock_trash.side_effect = Exception("Trash failed")
+
+    config = ScanConfig(rule="newest", ask=False, dry_run=False, expand_archives=False)
+    dedup = Deduplicator(HashCache(":memory:"), config)
+    
+    dedup.resolve([[str(f1), str(f2)]], str(dst), None)
+
+    # Assert: f2 should be permanently deleted because all else failed
+    assert not f2.exists()
+
+def test_app_cancel_selection(temp_env):
+    with patch('tkinter.filedialog.askdirectory') as mock_dir:
+        # User selects source but cancels destination
+        mock_dir.side_effect = ["/some/path", ""]
+        
+        root = tk.Tk()
+        app = CleanupApp(root)
+        app.run() # Should return early
+        
+        # Verify it didn't crash and remained idle
+        assert "Idle" in app.status.cget("text")
+        root.destroy()
+
+@patch('tkinter.simpledialog.askstring')
+def test_ask_user_logic_branches(mock_ask, temp_env):
+    root = tk.Tk()
+    app = CleanupApp(root)
+    paths = ["/path/1", "/path/2"]
+
+    # 1. Test user picks a valid number ("1")
+    mock_ask.return_value = "1"
+    assert app.ask_user(paths, is_folder=False) == "/path/1"
+
+    # 2. Test user picks "0" (Skip)
+    mock_ask.return_value = "0"
+    assert app.ask_user(paths, is_folder=False) is None
+
+    # 3. Test user hits "Cancel" (returns None)
+    mock_ask.return_value = None
+    assert app.ask_user(paths, is_folder=False) is None
+
+    # 4. Test user enters gibberish (ValueError branch)
+    mock_ask.return_value = "abc"
+    assert app.ask_user(paths, is_folder=False) is None
+
+    # 5. Test user enters out-of-bounds number
+    mock_ask.return_value = "99"
+    assert app.ask_user(paths, is_folder=False) is None
+
+    root.destroy()
+
+def test_auto_select_keep_fallback(temp_env):
+    src, _ = temp_env
+    p1 = str(src / "a.txt")
+    p2 = str(src / "b.txt")
+    paths = [p1, p2]
+    
+    # Create the files so os.path.getmtime doesn't crash if called
+    (src / "a.txt").write_text("file a")
+    (src / "b.txt").write_text("file b")
+
+    # Pass an unrecognized rule to trigger the final 'return paths[0]'
+    from duplicateRemover import auto_select_keep
+    result = auto_select_keep(paths, rule="unrecognized_rule")
+    
+    assert result == p1  # It should return the first item in the list
+
+def test_hash_cache_hit(tmp_path):
+    db_file = tmp_path / "cache_hit.db"
+    test_file = tmp_path / "static.txt"
+    test_file.write_text("consistent content")
+
+    cache = HashCache(str(db_file))
+    
+    # First pass: This calculates the hash and saves it (Cache Miss)
+    first_hash = cache.hash_file(str(test_file))
+    
+    # Second pass: This should trigger 'return row[0]' (Cache Hit)
+    # because the path, size, and mtime are identical.
+    second_hash = cache.hash_file(str(test_file))
+
+    assert first_hash == second_hash
+    cache.close()
+
+def test_deduplicator_status_callback(temp_env):
+    src, _ = temp_env
+    # A simple list to act as our callback collector
+    status_updates = []
+    def mock_callback(text):
+        status_updates.append(text)
+
+    config = ScanConfig("newest", False, False, False)
+    # Pass our collector into the deduplicator
+    dedup = Deduplicator(HashCache(":memory:"), config, status_cb=mock_callback)
+
+    # Directly call the internal _status method
+    test_message = "Testing status update"
+    dedup._status(test_message)
+
+    # Assert that our callback was triggered and the message was captured
+    assert test_message in status_updates
