@@ -475,3 +475,26 @@ def test_resolve_filename_collision(temp_env):
     assert (dst / "image.png").exists(), "Original collision file should remain"
     assert (dst / "image_1.png").exists(), "The moved file should have been renamed to image_1.png"
     assert keep_path.exists(), "The newer file should have stayed in source"
+
+def test_archive_extraction_file_collision(temp_env):
+    src, _ = temp_env
+    
+    # 1. Create a file named 'data.json'
+    collision_file = src / "data.json"
+    collision_file.write_text("i am a file")
+    
+    # 2. Create an archive named 'data.json.zip'
+    zip_path = src / "data.json.zip"
+    with zipfile.ZipFile(zip_path, 'w') as z:
+        z.writestr("test.txt", "content")
+        
+    config = ScanConfig(rule="newest", ask=False, dry_run=False, expand_archives=True)
+    dedup = Deduplicator(HashCache(":memory:"), config)
+    
+    # This should not crash now
+    dedup.expand_archives(str(src))
+    
+    # Verify: The file remains, and the archive is unpacked to a new folder
+    assert collision_file.is_file()
+    assert (src / "data.json_1").is_dir()
+    assert (src / "data.json_1" / "test.txt").exists()

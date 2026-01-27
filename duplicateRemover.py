@@ -118,14 +118,20 @@ class Deduplicator:
                     
                 for path in archives_to_unpack:
                     processed_paths.add(path)
-                    dest = os.path.join(os.path.dirname(path), os.path.splitext(os.path.basename(path))[0])
+                    
+                    base_dest = os.path.join(os.path.dirname(path), os.path.splitext(os.path.basename(path))[0])
+                    dest = base_dest
+                    counter = 1
+                    
+                    while os.path.exists(dest):
+                        dest = f"{base_dest}_{counter}"
+                        counter += 1
+                    
                     os.makedirs(dest, exist_ok=True)
                     self._unpack(path, dest)
+                    self._status(f"Unpacked: {os.path.basename(path)}")
                 
                 current_depth += 1
-            
-            if current_depth == max_depth:
-                self._status("Reached maximum archive depth. Stopping extraction.")
 
     def _unpack(self, path, dest):
         ext = os.path.splitext(path)[1].lower()
@@ -324,3 +330,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = CleanupApp(root)
     root.mainloop()
+
+# Confirm the selected folders and also lock the button afterwards to prevent multiple clicks. More insight into progress would also be helpful.
