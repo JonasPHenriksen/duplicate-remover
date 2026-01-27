@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from send2trash import send2trash
 import zipfile, tarfile, py7zr, rarfile
+from concurrent.futures import ThreadPoolExecutor
 
 # -------------------- config --------------------
 
@@ -183,24 +184,31 @@ class Deduplicator:
 
     def find_duplicate_files(self, root):
         by_size = {}
-
         for dirpath, _, filenames in walk_filtered(root):
             for name in filenames:
                 path = os.path.join(dirpath, name)
                 try:
                     size = os.path.getsize(path)
+                    by_size.setdefault(size, []).append(path)
                 except OSError:
                     continue
-                by_size.setdefault(size, []).append(path)
 
+        candidates = [f for f in by_size.values() if len(f) > 1]
+        total_to_hash = sum(len(g) for g in candidates)
+        processed_count = 0
+        
         duplicates = []
-        for files in by_size.values():
-            if len(files) < 2:
-                continue
+        for group in candidates:
             hashes = {}
-            for f in files:
-                h = self.cache.hash_file(f)
-                hashes.setdefault(h, []).append(f)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                results = list(executor.map(self.cache.hash_file, group))
+                
+            for f, h in zip(group, results):
+                processed_count += 1
+                self._status(f"Hashing: {os.path.basename(f)}", processed_count, total_to_hash)
+                if h:
+                    hashes.setdefault(h, []).append(f)
+                    
             duplicates.extend(g for g in hashes.values() if len(g) > 1)
 
         return duplicates
@@ -271,12 +279,24 @@ class CleanupApp:
         self.root.after(0, lambda: self.status.config(text=text))
 
     def ask_user(self, paths, is_folder):
-        title = "Duplicate folders" if is_folder else "Duplicate files"
-        text = "\n".join(f"{i+1}: {p}" for i, p in enumerate(paths))
-        choice = simpledialog.askstring(
-            title,
-            f"{title} found:\n\n{text}\n\nEnter number to keep, or 0 to skip:"
-        )
+        result_container = [None]
+
+        def show_dialog():
+            title = "Duplicate folders" if is_folder else "Duplicate files"
+            text = "\n".join(f"{i+1}: {p}" for i, p in enumerate(paths))
+            res = simpledialog.askstring(
+                title,
+                f"{title} found:\n\n{text}\n\nEnter number to keep, or 0 to skip:",
+                parent=self.root
+            )
+            result_container[0] = res if res is not None else "0"
+
+        self.root.after(0, show_dialog)
+        
+        while result_container[0] is None:
+            time.sleep(0.1)
+        
+        choice = result_container[0]
         if not choice or choice == "0":
             return None
         try:
@@ -312,35 +332,42 @@ class CleanupApp:
         self.is_running = True
         self.btn_run.config(state=tk.DISABLED)
 
-        config = ScanConfig(
-            rule=self.rule_var.get(),
-            ask=self.ask_var.get(),
-            dry_run=self.dry_var.get(),
-            expand_archives=self.expand_var.get(),
-        )
+        def task():
+            try:
+                config = ScanConfig(
+                    rule=self.rule_var.get(),
+                    ask=self.ask_var.get(),
+                    dry_run=self.dry_var.get(),
+                    expand_archives=self.expand_var.get(),
+                )
 
-        cache = HashCache()
-        dedup = Deduplicator(cache, config, self.update_status)
+                cache = HashCache()
+                dedup = Deduplicator(cache, config, self.update_status)
 
-        start = time.time()
+                start = time.time()
 
-        if config.expand_archives:
-            self.update_status("Expanding archives...")
-            dedup.expand_archives(src)
+                if config.expand_archives:
+                    self.update_status("Expanding archives...")
+                    dedup.expand_archives(src)
 
-        self.update_status("Finding duplicate folders...")
-        folders = dedup.find_duplicate_folders(src)
-        dedup.resolve(folders, dst, self.ask_user, is_folder=True)
+                self.update_status("Finding duplicate folders...")
+                folders = dedup.find_duplicate_folders(src)
+                dedup.resolve(folders, dst, self.ask_user, is_folder=True)
 
-        self.update_status("Finding duplicate files...")
-        files = dedup.find_duplicate_files(src)
-        dedup.resolve(files, dst, self.ask_user, is_folder=False)
+                self.update_status("Finding duplicate files...")
+                files = dedup.find_duplicate_files(src)
+                dedup.resolve(files, dst, self.ask_user, is_folder=False)
 
-        cache.close()
+                cache.close()
 
-        elapsed = time.time() - start
-        self.update_status(f"Done in {elapsed:.1f}s")
-        messagebox.showinfo("Finished", "Cleanup completed")
+                elapsed = time.time() - start
+                self.update_status(f"Done in {elapsed:.1f}s")
+                messagebox.showinfo("Finished", "Cleanup completed")
+            finally:
+                self.is_running = False
+                self.root.after(0, lambda: self.btn_run.config(state=tk.NORMAL))
+
+        threading.Thread(target=task).start()
 
 # -------------------- run --------------------
 
@@ -348,5 +375,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = CleanupApp(root)
     root.mainloop()
-
-# Confirm the selected folders and also lock the button afterwards to prevent multiple clicks. More insight into progress would also be helpful.
