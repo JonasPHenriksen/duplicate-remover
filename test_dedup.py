@@ -414,3 +414,54 @@ def test_deduplicator_status_callback(temp_env):
 
     # Assert that our callback was triggered and the message was captured
     assert test_message in status_updates
+
+@patch('tkinter.simpledialog.askstring')
+def test_resolve_user_skip(mock_ask, temp_env):
+    src, dst = temp_env
+    f1 = src / "dup.txt"
+    f1.write_text("content")
+    
+    # Setup: Ask is True, but mock returns None (User skipped)
+    config = ScanConfig(rule="newest", ask=True, dry_run=False, expand_archives=False)
+    dedup = Deduplicator(HashCache(":memory:"), config)
+    
+    # We pass the real app.ask_user method or a mock that returns None
+    mock_ask.return_value = "0" 
+    
+    # We call resolve with one group
+    dedup.resolve([[str(f1)]], str(dst), ask_fn=lambda g, is_f: None)
+
+    # Assert: The file should still be in source because we 'continued'
+    assert f1.exists()
+
+import time
+
+def test_resolve_filename_collision(temp_env):
+    src, dst = temp_env
+    
+    # 1. Create files
+    keep_path = src / "to_keep.txt"
+    move_path = src / "image.png"
+    keep_path.write_text("i am staying")
+    move_path.write_text("i am moving")
+    
+    # 2. Force keep_path to be the NEWEST
+    # Set move_path to the past, and keep_path to "now"
+    past_time = time.time() - 100
+    os.utime(move_path, (past_time, past_time))
+    os.utime(keep_path, (time.time(), time.time()))
+    
+    # 3. Pre-create the collision file in destination
+    (dst / "image.png").write_text("i was already here")
+    
+    config = ScanConfig(rule="newest", ask=False, dry_run=False, expand_archives=False)
+    dedup = Deduplicator(HashCache(":memory:"), config)
+    
+    # Execute resolve
+    # Because keep_path is newer, move_path MUST be the one moved.
+    dedup.resolve([[str(keep_path), str(move_path)]], str(dst), ask_fn=None)
+    
+    # Assertions
+    assert (dst / "image.png").exists(), "Original collision file should remain"
+    assert (dst / "image_1.png").exists(), "The moved file should have been renamed to image_1.png"
+    assert keep_path.exists(), "The newer file should have stayed in source"
