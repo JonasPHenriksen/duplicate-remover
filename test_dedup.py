@@ -304,24 +304,25 @@ def test_unpack_all_formats(temp_env):
 
 @patch('duplicateRemover.send2trash')
 @patch('shutil.move')
-def test_resolution_final_fallback(mock_move, mock_trash, temp_env):
+def test_resolution_final_fallback_safe(mock_move, mock_trash, temp_env):
     src, dst = temp_env
-    f1 = src / "stay.txt"
-    f2 = src / "gone.txt"
-    f1.write_bytes(b"data")
-    f2.write_bytes(b"data")
+    f1 = src / "keep.txt"
+    f2 = src / "skip_on_error.txt"
+    f1.write_text("data")
+    f2.write_text("data")
 
-    # Force move and trash to fail to reach the os.remove(p) line
+    # Force move and trash to fail
     mock_move.side_effect = Exception("Move failed")
     mock_trash.side_effect = Exception("Trash failed")
 
     config = ScanConfig(rule="newest", ask=False, dry_run=False, expand_archives=False)
     dedup = Deduplicator(HashCache(":memory:"), config)
     
+    # This should now skip the file instead of deleting it
     dedup.resolve([[str(f1), str(f2)]], str(dst), None)
 
-    # Assert: f2 should be permanently deleted because all else failed
-    assert not f2.exists()
+    # ASSERTION: The file must still exist!
+    assert f2.exists(), "The file should be skipped, not deleted, when errors occur."
 
 def test_app_cancel_selection(temp_env):
     with patch('tkinter.filedialog.askdirectory') as mock_dir:

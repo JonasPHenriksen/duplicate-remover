@@ -210,12 +210,12 @@ class Deduplicator:
 
                 try:
                     shutil.move(p, final_dst)
-                except Exception:
-                    # Fallback to trash if move fails for other reasons
+                except Exception as e:
                     try:
                         send2trash(p)
-                    except Exception:
-                        os.remove(p) # Final fallback: permanent delete
+                    except Exception as trash_err:
+                        print(f"[SKIP] Could not move or trash {p}: {trash_err}")
+                        continue
 
 # -------------------- UI --------------------
 
