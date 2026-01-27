@@ -8,10 +8,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from send2trash import send2trash
 import zipfile, tarfile, py7zr, rarfile
-from concurrent.futures import ThreadPoolExecutor
 import tkinter.scrolledtext as st
 from tkinter import ttk
-from typing import Any, Optional
+from typing import Any
 
 EXCLUDE_DIRS = {
     ".git", ".svn", ".hg", "node_modules",
@@ -72,6 +71,9 @@ class Mapper:
 
     def _build_folder_tree(self, root):
         for dirpath, dirnames, filenames in walk_filtered(root):
+            
+            self.status_cb(f"Scanning: {os.path.basename(dirpath)}...")
+            
             folder = FolderInfo(dirpath)
             self.path_to_folder[dirpath] = folder
             self.all_folders.append(folder)
@@ -148,7 +150,8 @@ class Mapper:
         return (file_count, total_size, tuple(all_entries))
         
 class HashCache:
-    def __init__(self, db_path=CACHE_DB):
+    def __init__(self, db_path=CACHE_DB, status_cb=None):
+        self.status_cb = status_cb or (lambda x: None)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._init_db()
 
@@ -174,6 +177,8 @@ class HashCache:
 
         if row and row[1] == size and row[2] == mtime:
             return row[0]
+
+        self.status_cb(f"Hashing: {os.path.basename(path)}...")
 
         h = hashlib.md5()
         with open(path, "rb") as f:
@@ -302,6 +307,10 @@ class Deduplicator:
             print("[DRY RUN]", path)
             return
         
+        action = "[DRY RUN]" if self.config.dry_run else "[MOVING]"
+
+        self.status_cb(f"{action} {os.path.basename(path)}")
+        
         base = os.path.basename(path)
         target = os.path.join(dest, base)
 
@@ -313,7 +322,8 @@ class Deduplicator:
 
         try:
             shutil.move(path, target)
-        except Exception:
+        except Exception as e:
+            self.status_cb(f"[ERROR] Could not move {path}: {e}")
             send2trash(path)
 
 class CleanupApp:
@@ -402,28 +412,32 @@ class CleanupApp:
             cache = None
             try:
                 config = ScanConfig(self.rule_var.get(), self.ask_var.get(), self.dry_var.get(), self.expand_var.get())
-                cache = HashCache()
+                
+                self.log("--- Starting Session ---")
+                self.log(f"Source: {src}")
+                
+                cache = HashCache(status_cb=self.log)
                 dedup = Deduplicator(cache, config, self.log) 
 
-                self.update_status("Starting...", 5)
-                
                 if config.expand_archives:
-                    self.log(">>> Extracting Archives...")
+                    self.update_status("Expanding archives...", 10)
                     dedup.expand_archives(src)
                 
-                self.update_status("Mapping files...", 30)
+                self.update_status("Mapping files and hashing...", 30)
                 mapper = Mapper(cache, self.log)
                 mapper.map_tree(src)
 
-                self.update_status("Analyzing Folders...", 60)
-                dedup.resolve_folders_top_down(mapper, self.ask_user, dst)
+                self.update_status("Comparing folder signatures...", 60)
+                mapper._index_folders() 
 
-                self.update_status("Analyzing Files...", 80)
+                self.log(">>> Resolving Duplicates...")
+                dedup.resolve_folders_top_down(mapper, self.ask_user, dst)
                 dedup.resolve_loose_files(mapper, self.ask_user, dst)
 
-                self.update_status("Complete!", 100)
+                self.update_status("Done!", 100)
                 self.log("--- FINISHED ---")
-                messagebox.showinfo("Done", "Cleanup process finished.")
+                messagebox.showinfo("Done", "Cleanup completed successfully.")
+
             except Exception as e:
                 self.log(f"ERROR: {str(e)}")
             finally:
