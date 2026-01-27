@@ -101,14 +101,31 @@ class Deduplicator:
     def _status(self, text):
         self.status_cb(text)
 
-    def expand_archives(self, root):
-        for dirpath, _, filenames in walk_filtered(root):
-            for name in filenames:
-                path = os.path.join(dirpath, name)
-                if path.lower().endswith(ARCHIVE_EXTS):
-                    dest = os.path.join(dirpath, os.path.splitext(name)[0])
+    def expand_archives(self, root, max_depth=5):
+            processed_paths = set()
+            current_depth = 0
+            
+            while current_depth < max_depth:
+                archives_to_unpack = []
+                for dirpath, _, filenames in walk_filtered(root):
+                    for name in filenames:
+                        path = os.path.join(dirpath, name)
+                        if path.lower().endswith(ARCHIVE_EXTS) and path not in processed_paths:
+                            archives_to_unpack.append(path)
+                
+                if not archives_to_unpack:
+                    break
+                    
+                for path in archives_to_unpack:
+                    processed_paths.add(path)
+                    dest = os.path.join(os.path.dirname(path), os.path.splitext(os.path.basename(path))[0])
                     os.makedirs(dest, exist_ok=True)
                     self._unpack(path, dest)
+                
+                current_depth += 1
+            
+            if current_depth == max_depth:
+                self._status("Reached maximum archive depth. Stopping extraction.")
 
     def _unpack(self, path, dest):
         ext = os.path.splitext(path)[1].lower()

@@ -84,26 +84,35 @@ def test_resolution_logic(temp_env):
     assert not os.path.exists(file_old)
     assert os.path.exists(dst / "old.txt")
 
-def test_expand_archives(temp_env):
-    src, dst = temp_env
-    # Create a dummy zip file
-    zip_path = src / "test.zip"
-    internal_file_name = "zipped_content.txt"
+def test_nested_archive_expansion(temp_env):
+    src, _ = temp_env
     
-    with zipfile.ZipFile(zip_path, 'w') as z:
-        z.writestr(internal_file_name, "hello world")
+    # 1. Create the inner zip
+    inner_zip_path = src / "inner.zip"
+    with zipfile.ZipFile(inner_zip_path, 'w') as z:
+        z.writestr("deep_file.txt", "I am very deep")
+        
+    # 2. Create the outer zip containing the inner zip
+    outer_zip_path = src / "outer.zip"
+    with zipfile.ZipFile(outer_zip_path, 'w') as z:
+        z.write(inner_zip_path, arcname="inner.zip")
+    
+    # Remove the loose inner zip so we only have the outer one
+    os.remove(inner_zip_path)
 
     config = ScanConfig(rule="newest", ask=False, dry_run=False, expand_archives=True)
-    cache = HashCache(":memory:")
-    dedup = Deduplicator(cache, config)
+    dedup = Deduplicator(HashCache(":memory:"), config)
 
+    # Execute
     dedup.expand_archives(str(src))
 
-    # Assert: The zip file should be gone (sent to trash/moved)
-    # Note: since send2trash is hard to test, we check if the folder exists
-    extracted_folder = src / "test"
-    assert extracted_folder.is_dir()
-    assert (extracted_folder / internal_file_name).exists()
+    # Assertions
+    # Level 1: Outer should be a folder now
+    assert (src / "outer").is_dir()
+    # Level 2: Inner should have been extracted from Outer and turned into a folder
+    assert (src / "outer" / "inner").is_dir()
+    # Level 3: The actual content should be present
+    assert (src / "outer" / "inner" / "deep_file.txt").exists()
 
 def test_all_resolution_rules(temp_env):
     src, dst = temp_env
