@@ -128,6 +128,9 @@ class Mapper:
         return (len(entries), total_size, tuple(entries))
     
     def _index_folders(self):
+
+        self.folders_by_signature = {}
+
         sorted_folders = sorted(
             self.all_folders, 
             key=lambda f: f.path.count(os.sep), 
@@ -140,19 +143,16 @@ class Mapper:
             self.folders_by_signature.setdefault(folder.signature, []).append(folder)
 
     def _calculate_in_memory_signature(self, folder):
-
         all_entries = []
         
         def collect_files(current_folder):
             for f in current_folder.files:
                 rel = os.path.relpath(f.path, folder.path)
                 all_entries.append((rel, f.hash, f.size))
-            
             for sub in current_folder.subfolders:
                 collect_files(sub)
 
         collect_files(folder)
-
         all_entries.sort()
         
         total_size = sum(e[2] for e in all_entries)
@@ -218,42 +218,50 @@ class Deduplicator:
         self.status_cb(text)
 
     def _mark_resolved(self, folder):
-        for root, _, files in os.walk(folder.path):
-            self.resolved_paths.add(root)
-            for f in files:
-                self.resolved_paths.add(os.path.join(root, f))
+        
+        if os.path.isdir(folder.path):
+            for root, _, files in os.walk(folder.path):
+                self.resolved_paths.add(root)
+                for f in files:
+                    self.resolved_paths.add(os.path.join(root, f))
+        else:
+            self.resolved_paths.add(folder.path)
 
     def expand_archives(self, root, max_depth=5):
-            processed_paths = set()
-            current_depth = 0
             
-            while current_depth < max_depth:
-                archives_to_unpack = []
-                for dirpath, _, filenames in walk_filtered(root):
-                    for name in filenames:
-                        path = os.path.join(dirpath, name)
-                        if path.lower().endswith(ARCHIVE_EXTS) and path not in processed_paths:
-                            archives_to_unpack.append(path)
+        processed_paths = set()
+        current_depth = 0
+        
+        while current_depth < max_depth:
+            archives_to_unpack = []
+            for dirpath, _, filenames in walk_filtered(root):
+                for name in filenames:
+                    path = os.path.join(dirpath, name)
+                    if self.config.dry_run:
+                        self._status(f"[DRY RUN] Would unpack: {os.path.basename(path)}")
+                        continue
+                    if path.lower().endswith(ARCHIVE_EXTS) and path not in processed_paths:
+                        archives_to_unpack.append(path)
+            
+            if not archives_to_unpack:
+                break
                 
-                if not archives_to_unpack:
-                    break
-                    
-                for path in archives_to_unpack:
-                    processed_paths.add(path)
-                    
-                    base_dest = os.path.join(os.path.dirname(path), os.path.splitext(os.path.basename(path))[0])
-                    dest = base_dest
-                    counter = 1
-                    
-                    while os.path.exists(dest):
-                        dest = f"{base_dest}_{counter}"
-                        counter += 1
-                    
-                    os.makedirs(dest, exist_ok=True)
-                    self._unpack(path, dest)
-                    self._status(f"Unpacked: {os.path.basename(path)}")
+            for path in archives_to_unpack:
+                processed_paths.add(path)
                 
-                current_depth += 1
+                base_dest = os.path.join(os.path.dirname(path), os.path.splitext(os.path.basename(path))[0])
+                dest = base_dest
+                counter = 1
+                
+                while os.path.exists(dest):
+                    dest = f"{base_dest}_{counter}"
+                    counter += 1
+                
+                os.makedirs(dest, exist_ok=True)
+                self._unpack(path, dest)
+                self._status(f"Unpacked: {os.path.basename(path)}")
+            
+            current_depth += 1
 
     def _unpack(self, path, dest):
         ext = os.path.splitext(path)[1].lower()
@@ -271,42 +279,48 @@ class Deduplicator:
             pass
 
     def resolve_folders_top_down(self, mapper, ask_fn, dest):
-        folders = sorted(
-            mapper.all_folders,
-            key=lambda f: f.path.count(os.sep)
-        )
+        folders = sorted(mapper.all_folders, key=lambda f: f.path.count(os.sep))
 
         for folder in folders:
-            if folder.path in self.resolved_paths:
+            if folder.path in self.resolved_paths or not os.path.exists(folder.path):
                 continue
 
-            group = mapper.folders_by_signature.get(folder.signature, [])
-            if len(group) < 2:
+            raw_group = mapper.folders_by_signature.get(folder.signature, [])
+            
+            candidates = [f.path for f in raw_group if os.path.exists(f.path) and f.path not in self.resolved_paths]
+            candidates.sort(key=len) # Shortest paths first
+
+            valid_group = []
+            for p in candidates:
+                if any(p.startswith(v + os.sep) for v in valid_group):
+                    continue
+                valid_group.append(p)
+
+            if len(valid_group) < 2:
                 continue
 
-            keep = ask_fn([f.path for f in group], is_folder=True)
-            if not keep:
-                continue
+            if self.config.ask:
+                keep = ask_fn(valid_group, is_folder=True)
+            else:
+                keep = auto_select_keep(valid_group, self.config.rule)
 
-            for f in group:
-                self.resolved_paths.add(f.path)
-                if f.path != keep:
-                    self._mark_resolved(f)
-                    self._remove_path(f.path, dest)
+            for path in valid_group:
+                if path != keep:
+                    self._mark_resolved(FolderInfo(path))
+                    self._remove_path(path, dest)
 
     def resolve_loose_files(self, mapper, ask_fn, dest):
         for hash, files in mapper.files_by_hash.items():
-            loose = [
-                f for f in files
-                if f.path not in self.resolved_paths
-            ]
+            loose = [f for f in files if f.path not in self.resolved_paths and os.path.exists(f.path)]
 
             if len(loose) < 2:
                 continue
 
-            keep = ask_fn([f.path for f in loose], is_folder=False)
-            if not keep:
-                continue
+            paths = [f.path for f in loose]
+            if self.config.ask:
+                keep = ask_fn(paths, is_folder=False)
+            else:
+                keep = auto_select_keep(paths, self.config.rule)
 
             for f in loose:
                 if f.path != keep:
@@ -314,13 +328,15 @@ class Deduplicator:
     
     def _remove_path(self, path, dest):
         
+        action = "[DRY RUN]" if self.config.dry_run else "[MOVING]"
+        self.status_cb(f"{action} {os.path.basename(path)}")
+
         if self.config.dry_run:
-            print("[DRY RUN]", path)
             return
         
-        action = "[DRY RUN]" if self.config.dry_run else "[MOVING]"
-
-        self.status_cb(f"{action} {os.path.basename(path)}")
+        if not os.path.exists(path):
+            self.status_cb(f"[SKIP] Path already moved/gone: {os.path.basename(path)}")
+            return
         
         base = os.path.basename(path)
         target = os.path.join(dest, base)
@@ -388,7 +404,11 @@ class CleanupApp:
 
     def ask_user(self, paths, is_folder):
 
+        if not self.ask_var.get():
+            return auto_select_keep(paths, self.rule_var.get())
+
         result_container: list[Any] = [None] 
+        done_event = threading.Event()
 
         def show_dialog():
             title = "Duplicate Found"
@@ -396,8 +416,10 @@ class CleanupApp:
             msg += "\n".join(f"[{i+1}] {p}" for i, p in enumerate(paths))
             res = simpledialog.askstring(title, msg, parent=self.root)
             result_container[0] = res if res is not None else "0"
+            done_event.set()
 
         self.root.after(0, show_dialog)
+        done_event.wait()
         while result_container[0] is None:
             time.sleep(0.1)
         
@@ -414,6 +436,14 @@ class CleanupApp:
         src = filedialog.askdirectory(title="Select source folder")
         dst = filedialog.askdirectory(title="Select destination folder")
         if not src or not dst: return
+
+        confirm = messagebox.askyesno(
+            "Confirm Operation",
+            f"Source: {src}\nDestination: {dst}\n\nAre you sure you want to proceed?"
+        )
+
+        if not confirm:
+            return
 
         self.is_running = True
         self.btn_run.config(state=tk.DISABLED)
@@ -439,7 +469,6 @@ class CleanupApp:
                 mapper.map_tree(src)
 
                 self.update_status("Comparing folder signatures...", 60)
-                mapper._index_folders() 
 
                 self.log(">>> Resolving Duplicates...")
                 dedup.resolve_folders_top_down(mapper, self.ask_user, dst)
