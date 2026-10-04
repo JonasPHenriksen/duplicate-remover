@@ -1,6 +1,4 @@
-error_log.txt
-seen_files.txt
-.venv
-__pycache__/
-hash_cache.db
-.coverage
+dist/
+/photo_cleanup
+/photo_cleanup.exe
+/duplicate-remover
