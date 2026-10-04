@@ -1,0 +1,1240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo cleanup</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #eef0f3; --card: #fff; --text: #111827; --muted: #374151; --line: #d1d5db; --edge: #6b7280;
+  --accent: #1d4ed8; --accent-hover: #1e3a8a; --accent-soft: #e3ebff; --on-accent: #fff;
+  --good: #166534; --good-soft: #dcfce7; --warn: #b45309; --warn-soft: #ffedd5;
+  --track: #e5e7eb; --focus: #f59e0b; --shade: rgba(17, 24, 39, .12);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1014; --card: #1a1d23; --text: #f3f4f6; --muted: #d1d5db; --line: #3a404b; --edge: #9ca3af;
+    --accent: #93b4ff; --accent-hover: #b9cdff; --accent-soft: #1d2947; --on-accent: #0b1020;
+    --good: #86efac; --good-soft: #12301d; --warn: #fdba74; --warn-soft: #3b2410;
+    --track: #2b3039; --focus: #fbbf24; --shade: rgba(0, 0, 0, .45);
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 125%; -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, "Noto Sans", Roboto, sans-serif; }
+body.loading main { visibility: hidden; }
+main { max-width: 42rem; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
+svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .8rem 1rem; margin-bottom: 1.2rem; }
+h1 { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: 1.35rem; }
+h1 svg { width: 1.8rem; height: 1.8rem; color: var(--accent); }
+.tools { display: flex; flex-wrap: wrap; gap: .6rem; }
+.langs { display: inline-flex; border: 2px solid var(--edge); border-radius: .7rem; overflow: hidden; }
+.langs button { border: 0; border-radius: 0; min-height: 2.6rem; padding: .2em .9em; }
+.langs button[aria-pressed=true], .langs button[aria-pressed=true]:hover { background: var(--accent); color: var(--on-accent); }
+
+.steps { display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; list-style: none; margin: 0 0 1.2rem; padding: 0; color: var(--muted); }
+.steps li { display: flex; align-items: center; gap: .5rem; }
+.steps .num { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem;
+  border: 2px solid var(--edge); border-radius: 50%; font-weight: 700; }
+.steps .now { color: var(--text); font-weight: 700; }
+.steps .now .num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.steps .past .num { background: var(--good); border-color: var(--good); color: var(--card); }
+
+.screen { background: var(--card); border: 1px solid var(--line); border-radius: 1rem; padding: 1.5rem 1.6rem;
+  box-shadow: 0 1px 3px var(--shade); }
+.screen h2 { margin: 0 0 .8rem; font-size: 1.6rem; line-height: 1.25; }
+.screen h2:focus { outline: none; }
+.screen h3 { margin: 0 0 .5rem; font-size: 1.25rem; line-height: 1.3; }
+p { margin: .7rem 0; }
+.muted { color: var(--muted); }
+.small { font-size: .9rem; }
+.big { font-size: 1.2rem; font-weight: 600; }
+.good { color: var(--good); }
+.label { margin: 1.2rem 0 .3rem; font-weight: 700; }
+.technical { font-family: var(--mono); font-size: .8rem; overflow-wrap: anywhere; }
+
+button { font: inherit; font-weight: 600; color: var(--text); background: var(--card); border: 2px solid var(--edge);
+  border-radius: .7rem; min-height: 2.9rem; padding: .45em 1.1em; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--accent-soft); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.big { font-size: 1.15rem; min-height: 3.4rem; padding: .5em 1.4em; }
+button.small { font-size: .9rem; min-height: 2.4rem; padding: .2em .8em; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; margin-top: 1.2rem; }
+
+.note { margin: 1rem 0; padding: .9rem 1.1rem; border-left: .4rem solid var(--accent); border-radius: .7rem; background: var(--accent-soft); }
+.note p { margin: 0; }
+.note .actions { margin-top: .8rem; }
+.note.good { border-color: var(--good); background: var(--good-soft); }
+.note.warn { border-color: var(--warn); background: var(--warn-soft); }
+
+.folder { display: flex; align-items: center; gap: 1rem; margin: 0 0 1rem; padding: 1rem 1.1rem; border: 2px solid var(--line); border-radius: .8rem; }
+.folder svg { flex: none; width: 3rem; height: 3rem; color: var(--accent); }
+.folder b { display: block; font-size: 1.3rem; overflow-wrap: anywhere; }
+.folder span { color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
+details.typing { margin-top: 1.6rem; }
+details.typing summary { cursor: pointer; padding: .3rem 0; color: var(--accent); font-weight: 600; }
+details.typing summary:hover { text-decoration: underline; }
+.row { display: flex; flex-wrap: wrap; gap: .6rem; }
+input[type=text] { flex: 1; min-width: 12rem; min-height: 2.9rem; padding: .4em .7em; font: inherit; color: var(--text);
+  background: var(--card); border: 2px solid var(--edge); border-radius: .7rem; }
+
+.phases { margin: 1rem 0; padding: 0; list-style: none; }
+.phases li { display: flex; gap: .5rem; padding: .2rem 0; color: var(--muted); }
+.phases .mark { flex: none; width: 1.4rem; text-align: center; font-weight: 700; }
+.phases .past { color: var(--good); }
+.phases .now { color: var(--text); font-weight: 700; }
+.bar { height: 1.4rem; margin: 1.2rem 0 .6rem; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar > div { width: 0; height: 100%; border-radius: 999px; background: var(--accent); transition: width .3s; }
+.bar.waiting > div { width: 30%; animation: slide 1.6s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .bar.waiting > div { width: 100%; animation: none; opacity: .35; }
+  .bar > div { transition: none; }
+}
+.numbers { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .3rem 1rem; font-size: 1.1rem; font-weight: 600; }
+.item { min-height: 1.5em; color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.facts { margin: .8rem 0; padding-left: 1.3rem; }
+.facts li { margin: .4rem 0; font-size: 1.1rem; }
+.part { margin-top: 1.8rem; padding-top: 1.4rem; border-top: 2px solid var(--line); }
+.choice { display: flex; align-items: flex-start; gap: .8rem; margin: .8rem 0; padding: .9rem 1rem; border: 2px solid var(--line);
+  border-radius: .8rem; font-weight: 600; cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+input[type=checkbox] { flex: none; width: 1.6rem; height: 1.6rem; margin: .05rem 0 0; accent-color: var(--accent); cursor: pointer; }
+.count { display: block; color: var(--muted); font-size: .9rem; font-weight: 400; }
+.group { display: flex; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--line); }
+.group:focus { outline: none; }
+.thumb { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .2rem;
+  width: 7.5rem; height: 7.5rem; padding: 0; overflow: hidden; border: 2px solid var(--line); border-radius: .6rem;
+  background: var(--track); color: var(--muted); font-size: .8rem; font-weight: 700; }
+button.thumb { cursor: zoom-in; }
+button.thumb:hover:not(:disabled) { border-color: var(--accent); background: var(--track); }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.thumb svg { width: 2.6rem; height: 2.6rem; }
+.files { flex: 1; min-width: 0; }
+.file { margin: 0 0 .45rem; overflow-wrap: anywhere; }
+.tag { display: inline-block; margin-right: .35rem; padding: .05rem .5rem; border-radius: .4rem; background: var(--track);
+  color: var(--muted); font-size: .85rem; font-weight: 700; }
+.keep .tag { background: var(--good-soft); color: var(--good); }
+.where { display: block; color: var(--muted); font-size: .9rem; }
+.why { margin: -.1rem 0 .6rem; color: var(--muted); font-size: .9rem; }
+.type { padding: .4rem 0 .8rem; }
+.type .choice { margin-bottom: .5rem; }
+.type ul { margin: .6rem 0 0 1rem; padding: 0; list-style: none; font-size: .9rem; overflow-wrap: anywhere; }
+.type li { padding: .15rem 0; }
+.sticky { position: sticky; bottom: 0; z-index: 1; margin: 1.4rem -1.6rem -1.5rem; padding: .9rem 1.6rem 1.1rem;
+  border-top: 2px solid var(--line); border-radius: 0 0 1rem 1rem; background: var(--card); box-shadow: 0 -.4rem 1rem var(--shade); }
+.sticky p { margin: 0; }
+.sticky .actions { margin-top: .7rem; }
+.next { padding: .9rem 0; border-top: 1px solid var(--line); }
+.next p { margin: 0; }
+.next .actions { margin-top: .7rem; }
+
+details.details { margin-top: 1.6rem; color: var(--muted); font-size: .85rem; }
+details.details summary { cursor: pointer; padding: .3rem 0; }
+#log { max-height: 18rem; margin-top: .6rem; overflow: auto; font: .75rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+#log .warn { color: var(--warn); }
+#viewer { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1rem; padding: 1rem; background: #0b0b0c; }
+#viewer img { max-width: 100%; max-height: calc(100vh - 7rem); object-fit: contain; border-radius: .4rem; }
+#viewer button { border-color: #fff; background: #fff; color: #111; }
+#closed { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  padding: 1.5rem; background: var(--bg); text-align: center; }
+
+@media (max-width: 34rem) {
+  html { font-size: 112.5%; }
+  .screen { padding: 1.1rem 1rem; }
+  .sticky { margin: 1.2rem -1rem -1.1rem; padding: .8rem 1rem 1rem; }
+  .thumb { width: 5rem; height: 5rem; }
+  .actions > button { flex: 1 1 100%; }
+}
+</style>
+</head>
+<body class="loading">
+<main>
+  <header>
+    <h1><span id="logo"></span><span data-t="appName"></span></h1>
+    <div class="tools">
+      <div class="langs" role="group" data-t-label="language">
+        <button type="button" data-lang="da" lang="da" aria-pressed="false">Dansk</button>
+        <button type="button" data-lang="en" lang="en" aria-pressed="false">English</button>
+      </div>
+      <button type="button" id="quit" data-t="quit"></button>
+    </div>
+  </header>
+  <ol class="steps" id="steps" hidden>
+    <li><span class="num">1</span><span data-t="step1"></span></li>
+    <li><span class="num">2</span><span data-t="step2"></span></li>
+    <li><span class="num">3</span><span data-t="step3"></span></li>
+  </ol>
+  <section class="screen" id="screen"></section>
+  <details class="details" id="details">
+    <summary data-t="details"></summary>
+    <div id="log"></div>
+  </details>
+</main>
+<div id="viewer" role="dialog" aria-modal="true" hidden>
+  <img alt="">
+  <button type="button" class="big" data-t="close"></button>
+</div>
+<div id="closed" hidden>
+  <div><h2></h2><p></p></div>
+</div>
+<script type="application/json" id="words">
+{
+"en": {
+  "appName": "Photo cleanup",
+  "language": "Language",
+  "quit": "Close the program",
+  "step1": "Choose a folder",
+  "step2": "See what was found",
+  "step3": "Tidy up",
+  "details": "Technical details (in English)",
+  "close": "Close",
+
+  "chooseTitle": "Which folder do you want to tidy up?",
+  "chooseIntro": "The program finds photos and videos that have more than one copy, and files that aren't photos or videos, and moves them into a folder of their own. Nothing is deleted, and you can always put everything back.",
+  "usePictures": "Use the “{name}” folder",
+  "pick": "Choose a folder…",
+  "pickOther": "Choose another folder…",
+  "picking": "Waiting for you to choose…",
+  "pickingHint": "A window has opened where you can choose the folder. If you can't see it, it may be behind this one: look for it in the bar at the bottom of the screen.",
+  "noPicker": "This computer can't show a window for choosing folders. Type or paste the folder's location below instead.",
+  "typePath": "Or type the folder's location",
+  "typePathHint": "You can copy the location from the file manager and paste it here.",
+  "useThis": "Use this folder",
+  "notFound": "There is no folder at {path}",
+  "chosen": "Chosen folder:",
+  "earlier": {"one": "You have tidied up this folder before. {n} file from then is still in the _Quarantine folder.", "other": "You have tidied up this folder before. {n} files from then are still in the _Quarantine folder."},
+  "undoEarlier": {"one": "Put the file back", "other": "Put the {n} files back"},
+  "scan": "Look through the folder",
+  "scanHint": "Nothing is moved yet. First you will see what the program has found.",
+
+  "scanning": "Looking through the folder…",
+  "moving": "Moving the files…",
+  "undoing": "Putting the files back…",
+  "working": "Working…",
+  "phaseScan": "Finding the photos and videos",
+  "phaseFingerprint": "Comparing them with each other",
+  "phaseHash": "Checking that the copies are exactly the same",
+  "foundSoFar": {"one": "{n} file found so far", "other": "{n} files found so far"},
+  "progressFiles": {"one": "{done} of {n} file", "other": "{done} of {n} files"},
+  "progressBytes": "{done} of {total}",
+  "minutesLeft": {"one": "About {n} minute left", "other": "About {n} minutes left"},
+  "underMinute": "Less than a minute left",
+  "justWait": "You can just wait. If there are many photos, it can take a while.",
+  "stop": "Stop",
+  "stopping": "Stopping…",
+
+  "reviewTitle": "This is what the program found",
+  "lookedAt": {"one": "It looked at {n} photo or video in {folder}.", "other": "It looked at {n} photos and videos in {folder}."},
+  "nothingFound": "Everything is in order: no photo or video has more than one copy, and every file is a photo or a video.",
+  "dupsCount": {"one": "{n} photo or video has more than one copy.", "other": "{n} photos and videos have more than one copy."},
+  "dupsCopies": {"one": "That makes {n} extra copy, which takes up {size}.", "other": "That makes {n} extra copies, which take up {size}."},
+  "otherCount": {"one": "{n} file is not a photo or a video. It takes up {size}.", "other": "{n} files are not photos or videos. They take up {size}."},
+  "earlierMore": {"one": "You have tidied up this folder before, and {n} file is already in _Quarantine. If you move more now, they join it, and putting things back puts all of them back.", "other": "You have tidied up this folder before, and {n} files are already in _Quarantine. If you move more now, they join them, and putting things back puts all of them back."},
+  "dupsTitle": "Photos and videos with more than one copy",
+  "dupsToggle": {"one": "Move the extra copy ({size})", "other": "Move the {n} extra copies ({size})"},
+  "dupsExplain": "The copies are exactly the same, down to the last detail. The one marked “Keep” stays where it is, and the others are moved to the _Quarantine folder. Click a picture to see it bigger.",
+  "keep": "Keep",
+  "move": "Move",
+  "inFolder": "in {folder}",
+  "inTop": "directly in {folder}",
+  "whyDump": "Kept because the other copy is in a backup or camera folder.",
+  "whyCopyName": "Kept because the other copy is named like a copy.",
+  "whyDeeper": "Kept because it is in a more specific folder.",
+  "whyOlder": "Kept because it is older than the other copy.",
+  "whyName": "The copies are alike in every way, so the first by name is kept.",
+  "showMore": "Show {n} more",
+  "moreInCsv": {"one": "…and {n} more. It is listed in the file duplicates.csv in the _Quarantine folder.", "other": "…and {n} more. They are all listed in the file duplicates.csv in the _Quarantine folder."},
+  "bigger": "See the picture bigger",
+  "video": "Video",
+  "otherTitle": "Files that aren't photos or videos",
+  "otherExplain": "Tick the kinds of files that should be moved to the _Quarantine folder. Remove the tick from those that should stay where they are.",
+  "typeFiles": {"one": "{n} file, {size}", "other": "{n} files, {size}"},
+  "showFiles": "Show the files",
+  "hideFiles": "Hide the files",
+  "moreFiles": {"one": "…and {n} more. It is listed in the file not-media.csv in the _Quarantine folder.", "other": "…and {n} more. They are all listed in the file not-media.csv in the _Quarantine folder."},
+  "typeEmpty": "Empty files, with nothing in them",
+  "typeNone": "Files without a file type",
+  "typeOther": "{ext} files",
+  "typeXmp": "Photo editing information",
+  "typeAae": "Edits made on an iPhone or iPad",
+  "typeThm": "Small preview pictures from a camera",
+  "typeSettings": "Settings",
+  "typeDatabase": "Databases",
+  "typeText": "Text",
+  "typeDocument": "Documents",
+  "typeSheet": "Spreadsheets",
+  "typeSlides": "Presentations",
+  "typeSound": "Sound and music",
+  "typeArchive": "Packed files",
+  "typeProgram": "Programs",
+  "typeShortcut": "Shortcuts and links",
+  "typeWeb": "Web pages",
+  "typeTemp": "Temporary or unfinished files",
+  "typeEmail": "E-mails",
+  "typeData": "Data files",
+  "reassure": "The files are moved into a folder called _Quarantine inside {folder}, and keep the folders they were in.",
+  "reassureShort": "Nothing is deleted, and you can always put everything back.",
+  "moveButton": {"one": "Move {n} file to _Quarantine", "other": "Move {n} files to _Quarantine"},
+  "nothingChosen": "Nothing is chosen to move",
+  "back": "Back",
+  "another": "Tidy up another folder",
+
+  "doneTitle": "Done!",
+  "stoppedTitle": "Stopped",
+  "moved": {"one": "{n} file ({size}) has been moved to the _Quarantine folder.", "other": "{n} files ({size}) have been moved to the _Quarantine folder."},
+  "movedStopped": {"one": "You stopped before everything was moved. {n} file ({size}) was moved.", "other": "You stopped before everything was moved. {n} files ({size}) were moved."},
+  "movedNone": "You stopped before anything was moved.",
+  "gaveUp": "The files could not be moved, so nothing has been moved.",
+  "gaveUpPartly": {"one": "The program had to stop after moving {n} file ({size}).", "other": "The program had to stop after moving {n} files ({size})."},
+  "readOnly": "Perhaps nothing can be changed in the folder, for example because it is on a USB stick or memory card that is write-protected.",
+  "notMoved": {"one": "{n} file could not be moved, so it is still where it was.", "other": "{n} files could not be moved, so they are still where they were."},
+  "seeDetails": "The technical details at the bottom of the page say why.",
+  "nothingDeleted": "Nothing has been deleted.",
+  "whatNow": "What now?",
+  "lookInQuarantine": "Have a look in the _Quarantine folder to see what has been moved.",
+  "openQuarantine": "Open the _Quarantine folder",
+  "regret": "Changed your mind? Then you can put all the files back where they were.",
+  "undo": "Undo: put the files back",
+  "deleteLater": "When you are sure you don't miss anything, you can delete the _Quarantine folder to free up {size}. Until then, the files still take up space on the computer.",
+
+  "undoneTitle": "Undo",
+  "restored": {"one": "{n} file is back where it was.", "other": "{n} files are back where they were."},
+  "nothingRestored": "No files were put back.",
+  "undoStopped": "You stopped before everything was back. The rest is still in _Quarantine.",
+  "undoAgain": "Put the rest back",
+  "missing": {"one": "{n} file was no longer in _Quarantine, so it could not be put back.", "other": "{n} files were no longer in _Quarantine, so they could not be put back."},
+  "blocked": {"one": "{n} file could not go back, because another file is now in its place. It stays in _Quarantine.", "other": "{n} files could not go back, because other files are now in their place. They stay in _Quarantine."},
+  "openFolder": "Open the folder",
+  "ok": "OK",
+  "stoppedText": "You stopped before the folder had been looked through. Nothing has been moved.",
+
+  "errorTitle": "Something went wrong",
+  "errorGone": "The folder can no longer be found. Choose it again.",
+  "errorBusy": "The program is busy with something else. Wait until it has finished, and try again.",
+  "errorRescan": "The folder has to be looked through again before the files can be moved.",
+  "errorOpen": "The folder could not be opened.",
+  "errorOther": "Try again. If it keeps happening, ask someone for help and show them the technical details at the bottom of the page.",
+
+  "closedTitle": "Photo cleanup has closed",
+  "closedText": "You can close this tab now. Start the program again if you want to carry on.",
+  "noTokenTitle": "Open Photo cleanup from the program",
+  "noTokenText": "This page only works through the link the program opens when it starts."
+},
+"da": {
+  "appName": "Billedoprydning",
+  "language": "Sprog",
+  "quit": "Luk programmet",
+  "step1": "Vælg en mappe",
+  "step2": "Se, hvad der er fundet",
+  "step3": "Ryd op",
+  "details": "Tekniske detaljer (på engelsk)",
+  "close": "Luk",
+
+  "chooseTitle": "Hvilken mappe vil du rydde op i?",
+  "chooseIntro": "Programmet finder billeder og videoer, der findes mere end én gang, og filer, der ikke er billeder eller videoer, og flytter dem over i en mappe for sig selv. Intet bliver slettet, og du kan altid lægge det hele tilbage.",
+  "usePictures": "Brug mappen »{name}«",
+  "pick": "Vælg en mappe…",
+  "pickOther": "Vælg en anden mappe…",
+  "picking": "Venter på, at du vælger…",
+  "pickingHint": "Der er åbnet et vindue, hvor du kan vælge mappen. Kan du ikke se det, ligger det måske bag ved dette vindue – kig efter det i bjælken nederst på skærmen.",
+  "noPicker": "Denne computer kan ikke vise et vindue til at vælge mapper. Skriv eller indsæt i stedet mappens placering herunder.",
+  "typePath": "Eller skriv mappens placering",
+  "typePathHint": "Du kan kopiere placeringen fra filhåndteringen og sætte den ind her.",
+  "useThis": "Brug denne mappe",
+  "notFound": "Der er ingen mappe her: {path}",
+  "chosen": "Valgt mappe:",
+  "earlier": {"one": "Du har ryddet op i denne mappe før. {n} fil fra dengang ligger stadig i mappen _Quarantine.", "other": "Du har ryddet op i denne mappe før. {n} filer fra dengang ligger stadig i mappen _Quarantine."},
+  "undoEarlier": {"one": "Læg filen tilbage", "other": "Læg de {n} filer tilbage"},
+  "scan": "Gennemgå mappen",
+  "scanHint": "Der bliver ikke flyttet noget endnu. Først får du at se, hvad programmet har fundet.",
+
+  "scanning": "Gennemgår mappen…",
+  "moving": "Flytter filerne…",
+  "undoing": "Lægger filerne tilbage…",
+  "working": "Arbejder…",
+  "phaseScan": "Finder billederne og videoerne",
+  "phaseFingerprint": "Sammenligner dem med hinanden",
+  "phaseHash": "Tjekker, at kopierne er helt ens",
+  "foundSoFar": {"one": "{n} fil fundet indtil videre", "other": "{n} filer fundet indtil videre"},
+  "progressFiles": {"one": "{done} af {n} fil", "other": "{done} af {n} filer"},
+  "progressBytes": "{done} af {total}",
+  "minutesLeft": {"one": "Cirka {n} minut tilbage", "other": "Cirka {n} minutter tilbage"},
+  "underMinute": "Under et minut tilbage",
+  "justWait": "Du kan bare vente. Er der mange billeder, kan det tage et stykke tid.",
+  "stop": "Stop",
+  "stopping": "Stopper…",
+
+  "reviewTitle": "Det her har programmet fundet",
+  "lookedAt": {"one": "Det har kigget på {n} billede eller video i {folder}.", "other": "Det har kigget på {n} billeder og videoer i {folder}."},
+  "nothingFound": "Alt er i orden: Ingen billeder eller videoer findes mere end én gang, og alle filerne er billeder eller videoer.",
+  "dupsCount": {"one": "{n} billede eller video findes mere end én gang.", "other": "{n} billeder og videoer findes mere end én gang."},
+  "dupsCopies": {"one": "Det giver {n} ekstra kopi, som fylder {size}.", "other": "Det giver {n} ekstra kopier, som fylder {size}."},
+  "otherCount": {"one": "{n} fil er hverken et billede eller en video. Den fylder {size}.", "other": "{n} filer er hverken billeder eller videoer. De fylder {size}."},
+  "earlierMore": {"one": "Du har ryddet op i denne mappe før, og {n} fil ligger allerede i _Quarantine. Flytter du flere nu, kommer de over til den, og fortryder du, bliver de alle sammen lagt tilbage.", "other": "Du har ryddet op i denne mappe før, og {n} filer ligger allerede i _Quarantine. Flytter du flere nu, kommer de over til dem, og fortryder du, bliver de alle sammen lagt tilbage."},
+  "dupsTitle": "Billeder og videoer, der findes mere end én gang",
+  "dupsToggle": {"one": "Flyt den ekstra kopi ({size})", "other": "Flyt de {n} ekstra kopier ({size})"},
+  "dupsExplain": "Kopierne er fuldstændig ens, helt ned i mindste detalje. Den, der er mærket »Beholdes«, bliver liggende, hvor den er, og de andre bliver flyttet over i mappen _Quarantine. Klik på et billede for at se det større.",
+  "keep": "Beholdes",
+  "move": "Flyttes",
+  "inFolder": "i {folder}",
+  "inTop": "direkte i {folder}",
+  "whyDump": "Den beholdes, fordi den anden kopi ligger i en backup- eller kameramappe.",
+  "whyCopyName": "Den beholdes, fordi den anden kopi har et navn som en kopi.",
+  "whyDeeper": "Den beholdes, fordi den ligger i en mere specifik mappe.",
+  "whyOlder": "Den beholdes, fordi den er ældre end den anden kopi.",
+  "whyName": "Kopierne er ens på alle måder, så den første efter navn beholdes.",
+  "showMore": "Vis {n} til",
+  "moreInCsv": {"one": "…og {n} til. Den står i filen duplicates.csv i mappen _Quarantine.", "other": "…og {n} til. De står alle sammen i filen duplicates.csv i mappen _Quarantine."},
+  "bigger": "Se billedet større",
+  "video": "Video",
+  "otherTitle": "Filer, der ikke er billeder eller videoer",
+  "otherExplain": "Sæt flueben ved de slags filer, der skal flyttes over i mappen _Quarantine. Fjern fluebenet ved dem, der skal blive, hvor de er.",
+  "typeFiles": {"one": "{n} fil, {size}", "other": "{n} filer, {size}"},
+  "showFiles": "Vis filerne",
+  "hideFiles": "Skjul filerne",
+  "moreFiles": {"one": "…og {n} til. Den står i filen not-media.csv i mappen _Quarantine.", "other": "…og {n} til. De står alle sammen i filen not-media.csv i mappen _Quarantine."},
+  "typeEmpty": "Tomme filer uden noget i",
+  "typeNone": "Filer uden filtype",
+  "typeOther": "{ext}-filer",
+  "typeXmp": "Oplysninger fra billedredigering",
+  "typeAae": "Redigeringer fra en iPhone eller iPad",
+  "typeThm": "Små forhåndsbilleder fra et kamera",
+  "typeSettings": "Indstillinger",
+  "typeDatabase": "Databaser",
+  "typeText": "Tekst",
+  "typeDocument": "Dokumenter",
+  "typeSheet": "Regneark",
+  "typeSlides": "Præsentationer",
+  "typeSound": "Lyd og musik",
+  "typeArchive": "Pakkede filer",
+  "typeProgram": "Programmer",
+  "typeShortcut": "Genveje og links",
+  "typeWeb": "Websider",
+  "typeTemp": "Midlertidige eller ufærdige filer",
+  "typeEmail": "E-mails",
+  "typeData": "Datafiler",
+  "reassure": "Filerne bliver flyttet over i en mappe, der hedder _Quarantine, inde i {folder}, og de beholder de mapper, de lå i.",
+  "reassureShort": "Intet bliver slettet, og du kan altid lægge det hele tilbage.",
+  "moveButton": {"one": "Flyt {n} fil til _Quarantine", "other": "Flyt {n} filer til _Quarantine"},
+  "nothingChosen": "Der er ikke valgt noget, der skal flyttes",
+  "back": "Tilbage",
+  "another": "Ryd op i en anden mappe",
+
+  "doneTitle": "Færdig!",
+  "stoppedTitle": "Stoppet",
+  "moved": {"one": "{n} fil ({size}) er flyttet over i mappen _Quarantine.", "other": "{n} filer ({size}) er flyttet over i mappen _Quarantine."},
+  "movedStopped": {"one": "Du stoppede, før alt var flyttet. {n} fil ({size}) nåede at blive flyttet.", "other": "Du stoppede, før alt var flyttet. {n} filer ({size}) nåede at blive flyttet."},
+  "movedNone": "Du stoppede, før der blev flyttet noget.",
+  "gaveUp": "Filerne kunne ikke flyttes, så der er ikke flyttet noget.",
+  "gaveUpPartly": {"one": "Programmet måtte stoppe efter at have flyttet {n} fil ({size}).", "other": "Programmet måtte stoppe efter at have flyttet {n} filer ({size})."},
+  "readOnly": "Måske kan der ikke ændres noget i mappen, for eksempel fordi den ligger på et USB-stik eller hukommelseskort, der er skrivebeskyttet.",
+  "notMoved": {"one": "{n} fil kunne ikke flyttes, så den ligger stadig, hvor den lå.", "other": "{n} filer kunne ikke flyttes, så de ligger stadig, hvor de lå."},
+  "seeDetails": "De tekniske detaljer nederst på siden fortæller hvorfor.",
+  "nothingDeleted": "Intet er blevet slettet.",
+  "whatNow": "Hvad nu?",
+  "lookInQuarantine": "Kig gerne i mappen _Quarantine for at se, hvad der er blevet flyttet.",
+  "openQuarantine": "Åbn mappen _Quarantine",
+  "regret": "Har du fortrudt? Så kan du lægge alle filerne tilbage, hvor de lå.",
+  "undo": "Fortryd: læg filerne tilbage",
+  "deleteLater": "Når du er sikker på, at du ikke savner noget, kan du slette mappen _Quarantine og frigøre {size}. Indtil da fylder filerne stadig på computeren.",
+
+  "undoneTitle": "Fortryd",
+  "restored": {"one": "{n} fil ligger igen, hvor den lå før.", "other": "{n} filer ligger igen, hvor de lå før."},
+  "nothingRestored": "Ingen filer blev lagt tilbage.",
+  "undoStopped": "Du stoppede, før alt var lagt tilbage. Resten ligger stadig i _Quarantine.",
+  "undoAgain": "Læg resten tilbage",
+  "missing": {"one": "{n} fil lå ikke længere i _Quarantine, så den kunne ikke lægges tilbage.", "other": "{n} filer lå ikke længere i _Quarantine, så de kunne ikke lægges tilbage."},
+  "blocked": {"one": "{n} fil kunne ikke lægges tilbage, fordi der nu ligger en anden fil på dens plads. Den bliver liggende i _Quarantine.", "other": "{n} filer kunne ikke lægges tilbage, fordi der nu ligger andre filer på deres plads. De bliver liggende i _Quarantine."},
+  "openFolder": "Åbn mappen",
+  "ok": "OK",
+  "stoppedText": "Du stoppede, før mappen var gennemgået. Der er ikke flyttet noget.",
+
+  "errorTitle": "Der gik noget galt",
+  "errorGone": "Mappen kan ikke længere findes. Vælg den igen.",
+  "errorBusy": "Programmet er i gang med noget andet. Vent, til det er færdigt, og prøv så igen.",
+  "errorRescan": "Mappen skal gennemgås igen, før filerne kan flyttes.",
+  "errorOpen": "Mappen kunne ikke åbnes.",
+  "errorOther": "Prøv igen. Bliver det ved med at ske, så bed nogen om hjælp, og vis dem de tekniske detaljer nederst på siden.",
+
+  "closedTitle": "Billedoprydning er lukket",
+  "closedText": "Du kan lukke denne fane nu. Start programmet igen, hvis du vil fortsætte.",
+  "noTokenTitle": "Åbn Billedoprydning fra programmet",
+  "noTokenText": "Denne side virker kun gennem det link, programmet åbner, når det starter."
+}
+}
+</script>
+<script>
+'use strict';
+const token = location.hash.slice(1);
+const $ = (id) => document.getElementById(id);
+const words = JSON.parse($('words').textContent);
+
+// el builds an element. Text always goes in as text, never as HTML, because
+// file names can contain anything.
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c != null && c !== false) e.append(c instanceof Node ? c : String(c));
+  }
+  return e;
+}
+const button = (label, onclick, cls) => el('button', { type: 'button', class: cls || '', onclick }, label);
+const actions = (...items) => el('div', { class: 'actions' }, items);
+
+const svgNS = 'http://www.w3.org/2000/svg';
+const icons = {
+  folder: 'M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z',
+  photo: 'M4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11A1.5 1.5 0 0 1 4.5 5z' +
+    'M3 15.5l5-5 4.5 4.5 3-3 5.5 5.5M16 9.5a1.5 1.5 0 1 0 .01 0',
+  video: 'M4.5 6h9A1.5 1.5 0 0 1 15 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 3 16.5v-9A1.5 1.5 0 0 1 4.5 6zM15 10.5l6-3.5v10l-6-3.5',
+};
+function icon(name) {
+  const svg = document.createElementNS(svgNS, 'svg');
+  const path = document.createElementNS(svgNS, 'path');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  path.setAttribute('d', icons[name]);
+  svg.append(path);
+  return svg;
+}
+
+// ---- words ----
+
+let lang = 'en';
+const locale = () => (lang === 'da' ? 'da-DK' : 'en-GB');
+const num = (n) => n.toLocaleString(locale());
+
+// tx is the text for key in the current language, as a list of strings and
+// elements: {name} is filled in from params, which can be elements, such as a
+// folder name in bold. Texts with a "one" and an "other" form go by params.n.
+function tx(key, params = {}) {
+  let text = Object.hasOwn(words[lang], key) ? words[lang][key] : undefined;
+  if (text === undefined) {
+    console.error('no words for', key);
+    text = key;
+  }
+  if (typeof text === 'object') text = params.n === 1 ? text.one : text.other;
+  return text.split(/\{(\w+)\}/).map((piece, i) => {
+    if (i % 2 === 0) return piece;
+    const v = params[piece];
+    return typeof v === 'number' ? num(v) : v;
+  });
+}
+const t = (key, params) => tx(key, params).join('');
+
+function human(n) {
+  if (n < 1024) return num(n) + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let f = n / 1024, i = 0;
+  while (f >= 1024 && i < units.length - 1) { f /= 1024; i++; }
+  return f.toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ' + units[i];
+}
+const percent = (share) => (Math.floor(100 * share) / 100).toLocaleString(locale(), { style: 'percent' });
+
+// The language chosen with the buttons at the top is kept in a cookie, which,
+// unlike the page's own storage, outlives this run: the next run gets another
+// port, and cookies go by the computer's address alone.
+function savedLanguage() {
+  const m = document.cookie.match(/(?:^|;\s*)photo_cleanup_lang=(da|en)(?:;|$)/);
+  return m ? m[1] : '';
+}
+
+function browserLanguage() {
+  for (const l of navigator.languages || []) {
+    const code = l.slice(0, 2).toLowerCase();
+    if (code === 'da' || code === 'en') return code;
+  }
+  return '';
+}
+
+// defaultLanguage is Danish when the computer or the web browser is set up in
+// Danish, as whoever set up either reads it, and English otherwise.
+function defaultLanguage(system) {
+  return system === 'da' || browserLanguage() === 'da' ? 'da' : 'en';
+}
+
+function setLanguage(l, keep) {
+  lang = l;
+  if (keep) document.cookie = `photo_cleanup_lang=${l}; max-age=34560000; path=/; samesite=strict`;
+  document.documentElement.lang = l;
+  for (const b of document.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === l));
+  for (const e of document.querySelectorAll('[data-t]')) e.textContent = t(e.dataset.t);
+  for (const e of document.querySelectorAll('[data-t-label]')) e.setAttribute('aria-label', t(e.dataset.tLabel));
+  if (closedAs) showClosed(closedAs);
+  render(false);
+}
+
+async function api(path, body) {
+  const res = await fetch('/api/' + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'X-Token': token, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const e = new Error((await res.text()).trim() || res.statusText);
+    e.status = res.status;
+    throw e;
+  }
+  return res.json();
+}
+
+// ---- screens ----
+
+// The card shows one screen at a time: choose, progress, review, moved,
+// undone, stopped or error. Each is drawn from scratch, so that it can be drawn
+// again in the other language.
+let screen = 'loading';
+let shownData = null; // what moved, undone and error show
+
+const screens = {
+  choose: chooseScreen, progress: progressScreen, review: reviewScreen,
+  moved: movedScreen, undone: undoneScreen, stopped: stoppedScreen, error: errorScreen,
+};
+
+function show(name, data) {
+  screen = name;
+  if (data !== undefined) shownData = data;
+  render(true);
+}
+
+// render draws the screen again. With moveFocus it is a new one, which starts
+// at the top, with the keyboard on its heading; otherwise the keyboard stays
+// where it was. A screen that fails to draw says so, rather than standing still.
+function render(moveFocus) {
+  const make = screens[screen];
+  if (!make) return;
+  const was = document.activeElement;
+  const kept = was && was.id && $('screen').contains(was) ? { id: was.id, start: was.selectionStart, end: was.selectionEnd } : null;
+  let parts;
+  try {
+    parts = make();
+  } catch (e) {
+    console.error(e);
+    screen = 'error';
+    shownData = { key: 'errorOther', technical: String(e) };
+    parts = errorScreen();
+  }
+  $('screen').replaceChildren(...parts.filter(Boolean));
+  if (starting) for (const b of $('screen').querySelectorAll('button')) b.disabled = true;
+  showSteps();
+  if (screen === 'progress') {
+    phaseShown = '';
+    updateProgress();
+  } else {
+    document.title = t('appName');
+  }
+  if (moveFocus) {
+    const h = $('screen').querySelector('h2');
+    h.tabIndex = -1;
+    h.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  } else if (kept && $(kept.id)) {
+    $(kept.id).focus({ preventScroll: true });
+    if (kept.start != null) $(kept.id).setSelectionRange(kept.start, kept.end);
+  }
+}
+
+function showSteps() {
+  let at = 0; // the step the screen is part of, and 4 when all are done
+  if (screen === 'choose') at = 1;
+  else if (screen === 'review' || (screen === 'progress' && kind === 'scan')) at = 2;
+  else if (screen === 'progress' && kind === 'move') at = 3;
+  else if (screen === 'moved' && !shownData.stopped && !shownData.gaveUp) at = 4;
+  $('steps').hidden = at === 0;
+  [...$('steps').children].forEach((li, i) => {
+    const step = i + 1;
+    li.className = step < at ? 'past' : step === at ? 'now' : '';
+    li.firstElementChild.textContent = step < at ? '✓' : String(step);
+    if (step === at) li.setAttribute('aria-current', 'step');
+    else li.removeAttribute('aria-current');
+  });
+}
+
+const baseName = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+
+function folderBox(p) {
+  return el('div', { class: 'folder' }, icon('folder'), el('div', {}, el('b', {}, baseName(p)), el('span', {}, p)));
+}
+
+// ---- 1. choosing the folder ----
+
+let path = '';        // the folder in question
+let checked = null;   // what the program said about it
+let pictures = '';    // a folder to suggest, if any
+let picking = false;  // whether the folder picker is open
+let noPicker = false; // whether this computer has one
+let typed = '';       // what is in the box for typing a location
+let typing = false;   // whether that box is open
+let checks = 0;
+
+// check asks the program about path. byHand says the folder was just chosen,
+// so the keyboard moves on: to the button that looks through it, or back to
+// the box it was typed in when there is no such folder.
+async function check(byHand) {
+  const p = path, n = ++checks;
+  let answer = null;
+  if (p.trim()) {
+    try { answer = await api('check', { path: p }); } catch (e) { answer = null; }
+  }
+  if (n !== checks) return; // asked again meanwhile
+  checked = answer;
+  if (screen !== 'choose') return;
+  render(false);
+  if (byHand && checked && checked.ok) $('scan').focus();
+  else if (byHand && checked && typing) $('typed').focus();
+}
+
+function choose(p, byHand) {
+  path = p;
+  checked = null;
+  check(byHand);
+}
+
+function chooseScreen() {
+  const found = checked && checked.ok ? checked : null;
+  const parts = [el('h2', {}, t('chooseTitle')), el('p', {}, t('chooseIntro'))];
+  if (checked && !found) parts.push(el('p', { class: 'note warn' }, t('notFound', { path: checked.path || path })));
+  if (found) {
+    parts.push(el('p', { class: 'label' }, t('chosen')), folderBox(found.path));
+    if (found.journal > 0) {
+      parts.push(el('div', { class: 'note' }, el('p', {}, t('earlier', { n: found.journal })),
+        actions(button(t('undoEarlier', { n: found.journal }), () => start('undo', { path: found.path })))));
+    }
+    const scan = button(t('scan'), () => start('scan', { path: found.path }), 'primary big');
+    scan.id = 'scan';
+    parts.push(actions(scan), el('p', { class: 'muted' }, t('scanHint')), actions(pickButton('pickOther', '')));
+  } else if (pictures) {
+    parts.push(actions(button(t('usePictures', { name: baseName(pictures) }), () => choose(pictures, true), 'primary big'),
+      pickButton('pickOther', 'big')));
+  } else {
+    parts.push(actions(pickButton('pick', 'primary big')));
+  }
+  if (picking) parts.push(el('p', { class: 'note' }, t('pickingHint')));
+  if (noPicker) parts.push(el('p', { class: 'note warn' }, t('noPicker')));
+  parts.push(typingBox());
+  return parts;
+}
+
+function pickButton(key, cls) {
+  const b = button(t(picking ? 'picking' : key), pick, cls);
+  b.id = 'pick';
+  b.disabled = picking;
+  return b;
+}
+
+async function pick() {
+  if (picking || starting || busy) return;
+  picking = true;
+  render(false);
+  let r = null;
+  try { r = await api('pick', { lang }); } catch (e) { r = null; }
+  picking = false;
+  if (r && r.unavailable) noPicker = typing = true;
+  if (r && r.path) {
+    choose(r.path, true);
+  } else if (screen === 'choose') {
+    render(false);
+    $(noPicker ? 'typed' : 'pick').focus();
+  }
+}
+
+function typingBox() {
+  const box = el('input', { type: 'text', id: 'typed', value: typed, spellcheck: 'false', autocomplete: 'off', 'aria-label': t('typePath') });
+  box.addEventListener('input', () => { typed = box.value; });
+  box.addEventListener('keydown', (e) => { if (e.key === 'Enter') useTyped(); });
+  const d = el('details', { class: 'typing', open: typing },
+    el('summary', {}, t('typePath')),
+    el('p', { class: 'muted small' }, t('typePathHint')),
+    el('div', { class: 'row' }, box, button(t('useThis'), useTyped)));
+  d.addEventListener('toggle', () => { typing = d.open; });
+  return d;
+}
+
+function useTyped() {
+  if (typed.trim()) choose(typed.trim(), true);
+}
+
+// ---- jobs and their progress ----
+
+let job = -1, since = 0, shown = -1, failures = 0, pollTimer = 0, polls = 0, first = true;
+let busy = false, kind = '', last = null;
+let starting = false, startedJob = 0, stopping = false;
+let phase = '', phaseStart = 0, phaseShown = '';
+
+async function start(what, body) {
+  if (starting || busy) return;
+  starting = true;
+  startedJob = Infinity;
+  for (const b of $('screen').querySelectorAll('button')) b.disabled = true; // no second click
+  try {
+    startedJob = (await api(what, body)).job;
+  } catch (e) {
+    starting = false;
+    failed(what, e);
+    return;
+  }
+  poll();
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  const n = ++polls;
+  let s;
+  try {
+    s = await api(`state?job=${job}&since=${since}`);
+  } catch (e) {
+    if (n !== polls || closedAs) return;
+    if (++failures >= 3) { showClosed('closed'); return; }
+    pollTimer = setTimeout(poll, 1000);
+    return;
+  }
+  // Only the answer to the latest poll counts: an earlier one that arrives
+  // late would turn the page back.
+  if (n !== polls || closedAs) return;
+  failures = 0;
+  pollTimer = setTimeout(poll, s.busy ? 250 : 2000); // first, so that nothing below can stop the polling
+  if (s.job !== job) {
+    job = s.job;
+    $('log').replaceChildren();
+    phase = '';
+  }
+  addLog(s.log || []);
+  since = s.next;
+  last = s;
+  busy = s.busy;
+  kind = s.kind;
+  if (starting && s.job >= startedJob) starting = false;
+  if (first) {
+    first = false;
+    if (!savedLanguage()) setLanguage(defaultLanguage(s.lang || ''), false);
+    pictures = s.pictures || '';
+    if (s.folder) choose(s.folder);
+    document.body.classList.remove('loading');
+  }
+  if (busy) {
+    if (screen !== 'progress') {
+      stopping = false;
+      show('progress');
+    } else {
+      updateProgress();
+    }
+  } else if (s.result && shown !== s.job) {
+    shown = s.job;
+    showResult(s.result);
+  } else if (screen === 'progress' || screen === 'loading') {
+    toChoose();
+  }
+}
+
+const titles = { scan: 'scanning', move: 'moving', undo: 'undoing' };
+const scanPhases = [['scan', 'phaseScan'], ['fingerprint', 'phaseFingerprint'], ['hash', 'phaseHash']];
+
+function progressScreen() {
+  const stop = button(t(stopping ? 'stopping' : 'stop'), stopJob, 'big');
+  stop.disabled = stopping;
+  return [
+    el('h2', { id: 'progressTitle' }, t(titles[kind] || 'working')),
+    el('ol', { class: 'phases', id: 'phases', hidden: kind !== 'scan' }),
+    el('div', { class: 'bar', id: 'bar', role: 'progressbar', 'aria-labelledby': 'progressTitle', 'aria-valuemin': 0, 'aria-valuemax': 100 }, el('div')),
+    el('div', { class: 'numbers' }, el('span', { id: 'progressText' }), el('span', { id: 'progressTime' })),
+    el('p', { class: 'item', id: 'progressItem' }),
+    el('p', { class: 'muted' }, t('justWait')),
+    actions(stop),
+  ];
+}
+
+function updateProgress() {
+  const s = last;
+  if (screen !== 'progress' || !s) return;
+  if (s.phase !== phase) { phase = s.phase; phaseStart = Date.now(); }
+  if (phaseShown !== s.phase) {
+    phaseShown = s.phase;
+    const at = scanPhases.findIndex(([p]) => p === s.phase);
+    $('phases').replaceChildren(...scanPhases.map(([, key], i) => el('li', { class: i < at ? 'past' : i === at ? 'now' : '' },
+      el('span', { class: 'mark', 'aria-hidden': 'true' }, i < at ? '✓' : i === at ? '→' : ''), t(key))));
+  }
+
+  const share = s.total > 0 ? Math.min(1, s.done / s.total) : 0;
+  const bar = $('bar');
+  bar.classList.toggle('waiting', !(s.total > 0));
+  bar.firstElementChild.style.width = s.total > 0 ? (100 * share).toFixed(1) + '%' : '';
+  bar.setAttribute('aria-valuenow', Math.floor(100 * share));
+
+  let text;
+  if (s.phase === 'scan') text = t('foundSoFar', { n: s.done });
+  else if (s.phase === 'hash') text = t('progressBytes', { done: human(s.done), total: human(s.total) });
+  else text = t('progressFiles', { done: num(s.done), n: s.total });
+  if (s.total > 0) text += ' · ' + percent(share);
+  $('progressText').textContent = text;
+
+  let time = '';
+  const spent = Date.now() - phaseStart;
+  if (s.total > 0 && s.done > 0 && spent > 3000) {
+    const left = spent * (s.total - s.done) / s.done;
+    if (left > 3000) time = left >= 60000 ? t('minutesLeft', { n: Math.round(left / 60000) }) : t('underMinute');
+  }
+  $('progressTime').textContent = time;
+  $('progressItem').textContent = s.item;
+  const title = t(titles[s.kind] || 'working');
+  $('progressTitle').textContent = title;
+  document.title = (s.total > 0 ? percent(share) + ' · ' : '') + title + ' · ' + t('appName');
+}
+
+function stopJob(e) {
+  stopping = true;
+  e.currentTarget.disabled = true;
+  e.currentTarget.textContent = t('stopping');
+  api('stop', {}).catch(() => {});
+}
+
+function addLog(lines) {
+  const log = $('log');
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  for (const l of lines) log.append(el('div', l.warn ? { class: 'warn' } : {}, l.text || ' '));
+  while (log.childElementCount > 3000) log.firstElementChild.remove();
+  if (lines.length && atEnd) log.scrollTop = log.scrollHeight;
+}
+
+function showResult(r) {
+  if (r.kind === 'preview') showReview(r);
+  else if (r.kind === 'moved' || r.kind === 'undone' || r.kind === 'stopped') show(r.kind, r);
+  else show('error', { key: 'errorOther', technical: r.error || '' });
+}
+
+function failed(what, e) {
+  if (e.status === 403) { showClosed('closed'); return; }
+  let key = 'errorOther';
+  if (e.status === 409) key = what === 'move' && !/busy/.test(e.message) ? 'errorRescan' : 'errorBusy';
+  else if (e.status === 400 && (what === 'scan' || what === 'undo')) key = 'errorGone';
+  show('error', { key, technical: e.message });
+}
+
+function toChoose() {
+  show('choose');
+  check();
+}
+
+// ---- 2. what was found ----
+
+let review = null;         // the scan being shown
+let moveDups = true;       // whether the extra copies move
+let skipTypes = new Set(); // the kinds of other files that stay where they are
+let openTypes = new Set(); // the kinds whose files are listed
+let groupsShown = 0;       // how many duplicate groups are on the page
+
+const firstGroups = 10, moreGroups = 20;
+const reasonKeys = { dump: 'whyDump', 'copy-name': 'whyCopyName', deeper: 'whyDeeper', older: 'whyOlder', name: 'whyName' };
+const typeKeys = {
+  xmp: 'typeXmp', aae: 'typeAae', thm: 'typeThm',
+  ini: 'typeSettings', cfg: 'typeSettings', conf: 'typeSettings', plist: 'typeSettings',
+  db: 'typeDatabase', sqlite: 'typeDatabase',
+  txt: 'typeText', rtf: 'typeText', md: 'typeText',
+  doc: 'typeDocument', docx: 'typeDocument', odt: 'typeDocument', pages: 'typeDocument',
+  xls: 'typeSheet', xlsx: 'typeSheet', ods: 'typeSheet', csv: 'typeSheet', numbers: 'typeSheet',
+  ppt: 'typeSlides', pptx: 'typeSlides', odp: 'typeSlides', key: 'typeSlides',
+  mp3: 'typeSound', m4a: 'typeSound', wav: 'typeSound', wma: 'typeSound', aac: 'typeSound', flac: 'typeSound',
+  ogg: 'typeSound', oga: 'typeSound', opus: 'typeSound', amr: 'typeSound', aif: 'typeSound', aiff: 'typeSound', mid: 'typeSound',
+  zip: 'typeArchive', rar: 'typeArchive', '7z': 'typeArchive', tar: 'typeArchive', gz: 'typeArchive', tgz: 'typeArchive',
+  exe: 'typeProgram', msi: 'typeProgram', dmg: 'typeProgram', pkg: 'typeProgram', apk: 'typeProgram', deb: 'typeProgram',
+  appimage: 'typeProgram', bat: 'typeProgram', cmd: 'typeProgram', sh: 'typeProgram', jar: 'typeProgram',
+  lnk: 'typeShortcut', url: 'typeShortcut', webloc: 'typeShortcut', desktop: 'typeShortcut',
+  html: 'typeWeb', htm: 'typeWeb', mht: 'typeWeb', mhtml: 'typeWeb',
+  tmp: 'typeTemp', temp: 'typeTemp', bak: 'typeTemp', part: 'typeTemp', partial: 'typeTemp', crdownload: 'typeTemp',
+  eml: 'typeEmail', msg: 'typeEmail',
+  json: 'typeData', xml: 'typeData', dat: 'typeData', log: 'typeData', bin: 'typeData',
+};
+// The photos the program sends to be shown (pictureTypes), and the videos
+// among the files it counts as media (mediaExt), by extension.
+const pictureExt = new Set('jpg jpeg jpe jfif png gif webp bmp dib avif heic heif'.split(' '));
+const videoExt = new Set('mp4 m4v mov qt avi mkv webm wmv asf flv f4v mpg mpeg mpe m1v m2v mts m2ts ts mod tod vob 3gp 3g2 mxf ogv ogm rm rmvb divx dv mjpg mjpeg insv lrv 360 braw r3d amv svi'.split(' '));
+
+function showReview(r) {
+  review = r;
+  moveDups = true;
+  skipTypes = new Set();
+  openTypes = new Set();
+  groupsShown = Math.min(firstGroups, r.groups.length);
+  show('review');
+}
+
+function reviewScreen() {
+  const r = review;
+  const parts = [el('h2', {}, t('reviewTitle'))];
+  const lookedAt = el('p', {}, tx('lookedAt', { n: r.media, folder: el('b', {}, baseName(r.folder)) }));
+  if (r.dupFiles + r.otherFiles === 0) {
+    return parts.concat(el('p', { class: 'note good big' }, '✓ ' + t('nothingFound')), lookedAt,
+      actions(button(t('another'), toChoose, 'primary big'), button(t('quit'), quit, 'big')));
+  }
+  const facts = el('ul', { class: 'facts' },
+    r.dupFiles > 0 ? el('li', {}, t('dupsCount', { n: r.groups.length + r.moreGroups }) + ' ' +
+      t('dupsCopies', { n: r.dupFiles, size: human(r.dupBytes) })) : null,
+    r.otherFiles > 0 ? el('li', {}, t('otherCount', { n: r.otherFiles, size: human(r.otherBytes) })) : null);
+  parts.push(lookedAt, facts);
+  if (r.journal > 0) parts.push(el('p', { class: 'note' }, t('earlierMore', { n: r.journal })));
+  if (r.dupFiles > 0) parts.push(dupsPart(r));
+  if (r.otherFiles > 0) parts.push(otherPart(r));
+  parts.push(el('p', { class: 'part' }, tx('reassure', { folder: el('b', {}, baseName(r.folder)) })));
+  const move = el('button', { type: 'button', class: 'primary big', id: 'move', onclick: moveFiles });
+  updateMove(move);
+  parts.push(el('div', { class: 'sticky' }, el('p', {}, t('reassureShort')), actions(move, button(t('back'), toChoose, 'big'))));
+  return parts;
+}
+
+function dupsPart(r) {
+  const box = el('input', { type: 'checkbox', checked: moveDups });
+  box.addEventListener('change', () => { moveDups = box.checked; updateMove(); });
+  const list = el('div');
+  const more = el('div');
+  const fill = () => {
+    for (let i = list.childElementCount; i < groupsShown; i++) list.append(groupRow(r.groups[i], i));
+    const left = r.groups.length - groupsShown;
+    if (left > 0) {
+      more.replaceChildren(button(t('showMore', { n: Math.min(moreGroups, left) }), () => {
+        const firstNew = groupsShown;
+        groupsShown = Math.min(r.groups.length, groupsShown + moreGroups);
+        fill();
+        list.children[firstNew].tabIndex = -1; // the keyboard goes on from the first new one
+        list.children[firstNew].focus();
+      }));
+    } else {
+      more.replaceChildren(...(r.moreGroups > 0 ? [el('p', { class: 'muted' }, t('moreInCsv', { n: r.moreGroups }))] : []));
+    }
+  };
+  fill();
+  return el('section', { class: 'part' },
+    el('h3', {}, t('dupsTitle')),
+    el('label', { class: 'choice' }, box, el('span', {}, t('dupsToggle', { n: r.dupFiles, size: human(r.dupBytes) }))),
+    el('p', {}, t('dupsExplain')),
+    list, more);
+}
+
+function groupRow(g, i) {
+  return el('div', { class: 'group' }, picture(g.keep, i),
+    el('div', { class: 'files' },
+      fileLine(true, g.keep),
+      el('p', { class: 'why' }, t(Object.hasOwn(reasonKeys, g.why) ? reasonKeys[g.why] : 'whyName')),
+      g.copies.map((c) => fileLine(false, c))));
+}
+
+// fileLine shows a file of a group by its name, and the folders it is in.
+function fileLine(keep, rel) {
+  const windows = /^([A-Za-z]:)?\\/.test(review.folder);
+  const folders = rel.split(windows ? '\\' : '/');
+  const name = folders.pop();
+  return el('p', { class: keep ? 'file keep' : 'file' },
+    el('span', { class: 'tag' }, (keep ? '✓ ' : '→ ') + t(keep ? 'keep' : 'move')), ' ', el('b', {}, name),
+    el('span', { class: 'where' }, folders.length ? t('inFolder', { folder: folders.join(' › ') })
+      : t('inTop', { folder: baseName(review.folder) })));
+}
+
+// picture shows what a group of duplicates looks like, and opens it bigger when
+// clicked. Videos, and photos the browser cannot show, get a stand-in.
+function picture(rel, i) {
+  const ext = (/\.([^.\\/]+)$/.exec(rel) || ['', ''])[1].toLowerCase();
+  const standIn = () => videoExt.has(ext)
+    ? el('div', { class: 'thumb' }, icon('video'), t('video'))
+    : el('div', { class: 'thumb' }, icon('photo'), ext.toUpperCase());
+  if (!pictureExt.has(ext)) return standIn();
+  const src = `/api/picture?token=${encodeURIComponent(token)}&job=${shown}&g=${i}`;
+  const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', src }); // lazy before src, or it loads at once
+  const box = el('button', { type: 'button', class: 'thumb', title: t('bigger'), 'aria-label': t('bigger') }, img);
+  img.addEventListener('error', () => box.replaceWith(standIn()));
+  box.addEventListener('click', () => openViewer(src, box));
+  return box;
+}
+
+function otherPart(r) {
+  return el('section', { class: 'part' },
+    el('h3', {}, t('otherTitle')),
+    el('p', {}, t('otherExplain')),
+    r.types.map((ty) => typeRow(ty)));
+}
+
+function typeRow(ty) {
+  const box = el('input', { type: 'checkbox', checked: !skipTypes.has(ty.type) });
+  box.addEventListener('change', () => {
+    if (box.checked) skipTypes.delete(ty.type);
+    else skipTypes.add(ty.type);
+    updateMove();
+  });
+  const list = el('ul', { hidden: !openTypes.has(ty.type) }, ty.paths.map((p) => el('li', {}, p)),
+    ty.files > ty.paths.length ? el('li', { class: 'muted' }, t('moreFiles', { n: ty.files - ty.paths.length })) : null);
+  const toggle = button(t(list.hidden ? 'showFiles' : 'hideFiles'), () => {
+    if (list.hidden) openTypes.add(ty.type);
+    else openTypes.delete(ty.type);
+    list.hidden = !list.hidden;
+    toggle.textContent = t(list.hidden ? 'showFiles' : 'hideFiles');
+    toggle.setAttribute('aria-expanded', String(!list.hidden));
+  }, 'small');
+  toggle.setAttribute('aria-expanded', String(!list.hidden));
+  return el('div', { class: 'type' },
+    el('label', { class: 'choice' }, box,
+      el('span', {}, typeName(ty.type), el('span', { class: 'count' }, t('typeFiles', { n: ty.files, size: human(ty.bytes) })))),
+    toggle, list);
+}
+
+// typeName names a kind of file by its extension, which can be anything,
+// "constructor" included: hence hasOwn.
+function typeName(type) {
+  if (type === '(empty)') return t('typeEmpty');
+  if (type === '(none)') return t('typeNone');
+  return Object.hasOwn(typeKeys, type) ? `${t(typeKeys[type])} (.${type})` : t('typeOther', { ext: '.' + type });
+}
+
+function selection() {
+  let files = moveDups ? review.dupFiles : 0;
+  for (const ty of review.types) if (!skipTypes.has(ty.type)) files += ty.files;
+  return files;
+}
+
+function updateMove(b = $('move')) {
+  if (!b) return;
+  const files = selection();
+  b.disabled = files === 0 || starting;
+  b.textContent = files === 0 ? t('nothingChosen') : t('moveButton', { n: files });
+}
+
+function moveFiles() {
+  start('move', { skipDuplicates: !moveDups, skipTypes: [...skipTypes] });
+}
+
+let viewerFrom = null;
+
+function openViewer(src, from) {
+  viewerFrom = from;
+  $('viewer').querySelector('img').src = src;
+  $('viewer').hidden = false;
+  document.querySelector('main').inert = true;
+  $('viewer').querySelector('button').focus();
+}
+
+function closeViewer() {
+  $('viewer').hidden = true;
+  $('viewer').querySelector('img').removeAttribute('src');
+  document.querySelector('main').inert = false;
+  if (viewerFrom) viewerFrom.focus();
+}
+
+// ---- 3. done ----
+
+const nextStep = (text, ...buttons) => el('div', { class: 'next' }, el('p', {}, text), buttons.length ? actions(...buttons) : null);
+
+// movedScreen says how a move went: done, stopped, or given up on an error,
+// such as a folder on a write-protected memory card. What comes next only
+// makes sense when something was moved.
+function movedScreen() {
+  const r = shownData;
+  const size = human(r.bytes);
+  const some = r.moved > 0;
+  let title = '✓ ' + t('doneTitle'), text = t('moved', { n: r.moved, size });
+  if (r.gaveUp) {
+    title = t('errorTitle');
+    text = some ? t('gaveUpPartly', { n: r.moved, size }) : t('gaveUp');
+  } else if (r.stopped) {
+    title = t('stoppedTitle');
+    text = some ? t('movedStopped', { n: r.moved, size }) : t('movedNone');
+  }
+  const problems = [r.gaveUp ? t('readOnly') : '', r.failed > 0 ? t('notMoved', { n: r.failed }) : ''].filter(Boolean);
+  return [
+    el('h2', {}, title),
+    el('p', { class: r.gaveUp || r.stopped ? 'big' : 'big good' }, text),
+    problems.length ? el('p', { class: 'note warn' }, [...problems, t('seeDetails')].join(' ')) : null,
+    el('p', {}, t('nothingDeleted')),
+    some ? el('h3', { class: 'part' }, t('whatNow')) : null,
+    some ? nextStep(t('lookInQuarantine'), button(t('openQuarantine'), (e) => reveal('quarantine', e.currentTarget), 'primary')) : null,
+    some ? nextStep(t('regret'), button(t('undo'), () => start('undo', { path: r.folder }))) : null,
+    some ? nextStep(t('deleteLater', { size })) : null,
+    actions(button(t('another'), toChoose, some ? 'big' : 'primary big'), button(t('quit'), quit, 'big')),
+  ];
+}
+
+function undoneScreen() {
+  const r = shownData;
+  return [
+    el('h2', {}, t('undoneTitle')),
+    el('p', { class: r.restored > 0 ? 'big good' : 'big' }, r.restored > 0 ? '✓ ' + t('restored', { n: r.restored }) : t('nothingRestored')),
+    r.stopped ? el('p', { class: 'note warn' }, t('undoStopped')) : null,
+    r.missing > 0 ? el('p', { class: 'note warn' }, t('missing', { n: r.missing })) : null,
+    r.blocked > 0 ? el('p', { class: 'note warn' }, t('blocked', { n: r.blocked }) + ' ' + t('seeDetails')) : null,
+    actions(
+      r.stopped ? button(t('undoAgain'), () => start('undo', { path: r.folder }), 'primary big') : null,
+      button(t('openFolder'), (e) => reveal('folder', e.currentTarget), r.stopped ? 'big' : 'primary big'),
+      button(t('ok'), toChoose, 'big')),
+  ];
+}
+
+function stoppedScreen() {
+  return [el('h2', {}, t('stoppedTitle')), el('p', { class: 'big' }, t('stoppedText')), actions(button(t('ok'), toChoose, 'primary big'))];
+}
+
+function errorScreen() {
+  const e = shownData;
+  return [
+    el('h2', {}, t('errorTitle')),
+    el('p', { class: 'big' }, t(e.key)),
+    e.technical ? el('p', { class: 'muted technical' }, e.technical) : null,
+    actions(button(t('ok'), toChoose, 'primary big')),
+  ];
+}
+
+async function reveal(what, from) {
+  const row = from.closest('.actions');
+  row.parentElement.querySelector('.cannot-open')?.remove();
+  try {
+    await api('reveal', { what });
+  } catch (e) {
+    row.after(el('p', { class: 'note warn cannot-open' }, t('errorOpen'), el('span', { class: 'technical' }, ' ' + e.message)));
+  }
+}
+
+// ---- closing ----
+
+let closedAs = ''; // why the page says the program has closed: closed or noToken
+
+function quit() {
+  api('quit', {}).catch(() => {});
+  showClosed('closed');
+}
+
+function showClosed(why) {
+  clearTimeout(pollTimer);
+  closedAs = why;
+  $('closed').querySelector('h2').textContent = t(why === 'noToken' ? 'noTokenTitle' : 'closedTitle');
+  $('closed').querySelector('p').textContent = t(why === 'noToken' ? 'noTokenText' : 'closedText');
+  $('closed').hidden = false;
+  document.title = t('appName');
+  document.body.classList.remove('loading');
+}
+
+$('logo').append(icon('photo'));
+for (const b of document.querySelectorAll('[data-lang]')) b.addEventListener('click', () => setLanguage(b.dataset.lang, true));
+$('quit').addEventListener('click', quit);
+$('viewer').addEventListener('click', (e) => { if (e.target.tagName !== 'IMG') closeViewer(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('viewer').hidden) closeViewer(); });
+window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye?token=' + encodeURIComponent(token)));
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !closedAs) poll(); });
+
+setLanguage(savedLanguage() || defaultLanguage(''), false);
+if (token) poll();
+else showClosed('noToken');
+</script>
+</body>
+</html>

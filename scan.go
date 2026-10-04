@@ -356,17 +356,29 @@ func sortForKeeping(files []*file) {
 	sort.SliceStable(files, func(i, j int) bool { return ranks[files[i]].less(ranks[files[j]]) })
 }
 
-func whyKept(keeper, loser *file) string {
+// keptBecause says why keeper stays rather than loser, as a code that the
+// simple page puts into words. whyKept says it in English, for the reports.
+func keptBecause(keeper, loser *file) string {
 	k, l := keeperRank(keeper), keeperRank(loser)
 	switch {
 	case k.inDump != l.inDump:
-		return "other copy sits in a backup/DCIM folder"
+		return "dump"
 	case k.looksCopied != l.looksCopied:
-		return "other copy is named like a copy"
+		return "copy-name"
 	case k.depth != l.depth:
-		return "this copy is in a more specific folder"
+		return "deeper"
 	case k.mtime != l.mtime:
-		return "this copy is older"
+		return "older"
 	}
-	return "identical in every way, first by name"
+	return "name"
 }
+
+var reasons = map[string]string{
+	"dump":      "other copy sits in a backup/DCIM folder",
+	"copy-name": "other copy is named like a copy",
+	"deeper":    "this copy is in a more specific folder",
+	"older":     "this copy is older",
+	"name":      "identical in every way, first by name",
+}
+
+func whyKept(keeper, loser *file) string { return reasons[keptBecause(keeper, loser)] }

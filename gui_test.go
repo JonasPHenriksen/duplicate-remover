@@ -146,8 +146,8 @@ func TestGUIScanMoveAndUndo(t *testing.T) {
 	if p.Kind != "preview" || p.Media != 3 || p.DupFiles != 1 || p.DupBytes != 9 || p.OtherFiles != 2 {
 		t.Fatalf("preview %+v", p)
 	}
-	want := []groupView{{Keep: filepath.FromSlash("Trip/IMG_1.jpg"), Reason: "other copy is named like a copy", Size: 9,
-		Copies: []string{filepath.FromSlash("Trip/IMG_1 (1).jpg")}}}
+	want := []groupView{{Keep: filepath.FromSlash("Trip/IMG_1.jpg"), Reason: "other copy is named like a copy", Why: "copy-name",
+		Size: 9, Copies: []string{filepath.FromSlash("Trip/IMG_1 (1).jpg")}}}
 	if !reflect.DeepEqual(p.Groups, want) {
 		t.Errorf("groups %+v", p.Groups)
 	}
@@ -159,7 +159,7 @@ func TestGUIScanMoveAndUndo(t *testing.T) {
 	// Leave the .txt files where they are.
 	call(t, s, srv, "POST", "/api/move", map[string]any{"skipTypes": []string{"txt"}}, nil)
 	m := result[outcome](t, s, srv)
-	if m.Kind != "moved" || m.Moved != 2 || m.Failed != 0 || m.Bytes != 9 || m.Stopped {
+	if m.Kind != "moved" || m.Moved != 2 || m.Failed != 0 || m.Bytes != 9 || m.Stopped || m.GaveUp {
 		t.Errorf("move %+v", m)
 	}
 	left := map[string]string{"Trip/IMG_1.jpg": "photo one", "Trip/IMG_2.jpg": "photo two", "Notes/notes.txt": "packing list"}
@@ -240,7 +240,7 @@ func TestGUIPicksAFolder(t *testing.T) {
 		err         error
 		unavailable bool
 	}{{"/Users/me/Pictures", nil, false}, {"", nil, false}, {"", errNoPicker, true}} {
-		pickFolder = func() (string, error) { return tc.path, tc.err }
+		pickFolder = func(string, string) (string, error) { return tc.path, tc.err }
 		var got struct {
 			Path        string
 			Unavailable bool
@@ -306,6 +306,15 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 func (b *syncBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.b.String() }
 
 func TestGUIStartsAndQuits(t *testing.T) {
+	if out := startAndQuit(t); !strings.Contains(out, "photo_cleanup has closed.") {
+		t.Errorf("did not say so when it closed:\n%s", out)
+	}
+}
+
+// startAndQuit starts gui, opens its page, clicks Quit and returns what gui
+// printed.
+func startAndQuit(t *testing.T) string {
+	t.Helper()
 	t.Setenv("PHOTO_CLEANUP_NO_BROWSER", "1")
 	var out syncBuffer
 	done := make(chan int, 1)
@@ -331,10 +340,11 @@ func TestGUIStartsAndQuits(t *testing.T) {
 	}
 	select {
 	case code := <-done:
-		if code != 0 || !strings.Contains(out.String(), "photo_cleanup has closed.") {
+		if code != 0 {
 			t.Errorf("exit %d\n%s", code, out.String())
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("did not close after Quit")
 	}
+	return out.String()
 }

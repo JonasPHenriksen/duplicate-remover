@@ -54,12 +54,12 @@ func gui(prog, folder string, out io.Writer) int {
 	srv := &http.Server{Handler: s.handler(ln.Addr().String()), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
 
+	say := windowWords(s.lang)
 	url := fmt.Sprintf("http://%s/#%s", ln.Addr(), s.token)
-	fmt.Fprintf(out, "photo_cleanup is open in your web browser. If it did not open, go to\n  %s\n\n"+
-		"Keep this window open while you use it: closing it quits photo_cleanup.\n", url)
+	fmt.Fprintf(out, say.open, url)
 	if os.Getenv("PHOTO_CLEANUP_NO_BROWSER") == "" {
 		if err := openBrowser(url); err != nil {
-			fmt.Fprintln(out, "Could not open the web browser:", err)
+			fmt.Fprintln(out, say.noBrowser, err)
 		}
 	}
 
@@ -80,7 +80,7 @@ func gui(prog, folder string, out io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
-	fmt.Fprintln(out, "photo_cleanup has closed.")
+	fmt.Fprintln(out, say.closed)
 	return 0
 }
 
@@ -88,6 +88,7 @@ func gui(prog, folder string, out io.Writer) int {
 // running in the background.
 type session struct {
 	token, prog, folder string // folder: given when the program started, if any
+	lang, pictures      string // the simple edition's: see systemLanguage and picturesFolder
 
 	stopping atomic.Bool // the running job should stop between two files
 
@@ -116,7 +117,11 @@ type logLine struct {
 func newSession(prog, folder string) *session {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return &session{token: hex.EncodeToString(b), prog: prog, folder: folder, lastSeen: time.Now()}
+	s := &session{token: hex.EncodeToString(b), prog: prog, folder: folder, lastSeen: time.Now()}
+	if simpleEdition() {
+		s.lang, s.pictures = systemLanguage(), picturesFolder()
+	}
+	return s
 }
 
 // handler serves the page and its API. Only requests addressed to host get
@@ -133,6 +138,7 @@ func (s *session) handler(host string) http.Handler {
 	mux.HandleFunc("POST /api/undo", s.startUndo)
 	mux.HandleFunc("POST /api/stop", s.stop)
 	mux.HandleFunc("POST /api/reveal", s.reveal)
+	mux.HandleFunc("GET /api/picture", s.picture)
 	mux.HandleFunc("POST /api/quit", s.quitPage)
 	mux.HandleFunc("POST /api/bye", s.bye)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -143,7 +149,7 @@ func (s *session) handler(host string) http.Handler {
 		if strings.HasPrefix(req.URL.Path, "/api/") {
 			token := req.Header.Get("X-Token")
 			if token == "" {
-				token = req.URL.Query().Get("token") // sendBeacon cannot set headers
+				token = req.URL.Query().Get("token") // sendBeacon and <img> cannot set headers
 			}
 			if subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1 {
 				http.Error(w, "wrong token", http.StatusForbidden)
@@ -158,14 +164,18 @@ func (s *session) handler(host string) http.Handler {
 }
 
 func (s *session) page(w http.ResponseWriter, req *http.Request) {
+	page, pictures := guiPage, ""
+	if simpleEdition() {
+		page, pictures = simplePage, "img-src 'self'; "
+	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
-		"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		pictures+"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
-	w.Write(guiPage)
+	w.Write(page)
 }
 
 type stateReply struct {
@@ -180,6 +190,9 @@ type stateReply struct {
 	Next   int       `json:"next"` // since, next time
 	Result any       `json:"result"`
 	Folder string    `json:"folder"`
+
+	Lang     string `json:"lang,omitempty"`     // the simple edition's, for its page
+	Pictures string `json:"pictures,omitempty"` // likewise
 }
 
 // state is what the page asks for a few times a second.
@@ -191,7 +204,8 @@ func (s *session) state(w http.ResponseWriter, req *http.Request) {
 		since = 0
 	}
 	reply := stateReply{Job: s.job, Busy: s.busy, Kind: s.kind, Phase: s.phase, Done: s.done, Total: s.total,
-		Item: s.item, Log: s.log[since:], Next: len(s.log), Result: s.result, Folder: s.folder}
+		Item: s.item, Log: s.log[since:], Next: len(s.log), Result: s.result, Folder: s.folder,
+		Lang: s.lang, Pictures: s.pictures}
 	s.mu.Unlock()
 	writeJSON(w, reply)
 }
@@ -226,8 +240,14 @@ func chosenFolder(path string) (string, bool) {
 	return folder(path)
 }
 
+// pick shows the folder picker, titled in the page's language. In the simple
+// edition it opens at the folder the page suggests, where it can.
 func (s *session) pick(w http.ResponseWriter, req *http.Request) {
-	path, err := pickFolder()
+	var in struct{ Lang string }
+	if !readJSON(w, req, &in) {
+		return
+	}
+	path, err := pickFolder(pickerTitle(in.Lang), s.pictures)
 	writeJSON(w, map[string]any{"path": path, "unavailable": err != nil})
 }
 
@@ -274,13 +294,14 @@ func (s *session) startMove(w http.ResponseWriter, req *http.Request) {
 	}
 	s.start(w, "move", p.root, func(r *reporter) any {
 		p.leaveOut(in.SkipDuplicates, setOf(in.SkipTypes...))
-		if p.apply(r) == 0 {
+		code := p.apply(r)
+		if code == 0 {
 			if _, err := p.writeReports(s.prog); err != nil {
 				r.warnf("  ! could not write the reports: %v\n", err)
 			}
 		}
 		return outcome{Kind: "moved", Folder: p.root, Quarantine: filepath.Join(p.root, quarantine),
-			Moved: p.moved, Failed: p.failed, Bytes: p.movedBytes, Stopped: p.stopped}
+			Moved: p.moved, Failed: p.failed, Bytes: p.movedBytes, Stopped: p.stopped, GaveUp: code == 1}
 	})
 }
 
@@ -442,6 +463,7 @@ type outcome struct {
 	Missing    int    `json:"missing"`
 	Blocked    int    `json:"blocked"`
 	Stopped    bool   `json:"stopped"`
+	GaveUp     bool   `json:"gaveUp,omitempty"` // a move that met an error it could not go on after, in the log
 	Error      string `json:"error,omitempty"`
 }
 
@@ -466,6 +488,7 @@ type previewView struct {
 type groupView struct {
 	Keep   string   `json:"keep"`
 	Reason string   `json:"reason"`
+	Why    string   `json:"why"` // the reason as a code, for the simple page
 	Size   int64    `json:"size"`
 	Copies []string `json:"copies"`
 }
@@ -490,7 +513,8 @@ func preview(p *plan) previewView {
 			v.MoreGroups++
 			continue
 		}
-		gv := groupView{Keep: filepath.FromSlash(g.keeper.rel), Reason: whyKept(g.keeper, g.losers[0]), Size: g.keeper.size}
+		why := keptBecause(g.keeper, g.losers[0])
+		gv := groupView{Keep: filepath.FromSlash(g.keeper.rel), Reason: reasons[why], Why: why, Size: g.keeper.size}
 		for _, f := range g.losers {
 			gv.Copies = append(gv.Copies, filepath.FromSlash(f.rel))
 		}

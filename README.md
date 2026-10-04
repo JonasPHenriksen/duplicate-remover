@@ -6,18 +6,19 @@
 - **Preview first.** Nothing moves until you say so.
 - **Nothing to install.** It is one file for Windows, macOS or Linux. Put it on a USB stick and run it anywhere.
 - **A window to click through,** in your web browser, with progress bars, a review of everything before it moves, and undo.
+- **A simple version** in Danish or English, with large text, plain words and pictures of the duplicates, for anyone who would rather not see file paths. See [The simple version](#the-simple-version).
 
 ## Get it
 
-Pick the file for the computer you are on. They are published on the repository's Releases page when a version tag is pushed, or you can build them yourself (see [Building](#building)).
+Pick the file for the computer you are on, in the regular version or the [simple one](#the-simple-version). They are published on the repository's Releases page when a version tag is pushed, or you can build them yourself (see [Building](#building)).
 
-| Computer | File |
-| --- | --- |
-| Windows (almost every PC) | `photo_cleanup-windows-x64.exe` |
-| Windows on ARM | `photo_cleanup-windows-arm64.exe` |
-| Mac, Apple Silicon or Intel | `photo_cleanup-macos` |
-| Linux, 64-bit PC | `photo_cleanup-linux-x64` |
-| Linux, 64-bit ARM such as a Raspberry Pi 4 or 5 | `photo_cleanup-linux-arm64` |
+| Computer | Regular | Simple, in Danish or English |
+| --- | --- | --- |
+| Windows (almost every PC) | `photo_cleanup-windows-x64.exe` | `photo_cleanup-simple-windows-x64.exe` |
+| Windows on ARM | `photo_cleanup-windows-arm64.exe` | `photo_cleanup-simple-windows-arm64.exe` |
+| Mac, Apple Silicon or Intel | `photo_cleanup-macos` | `photo_cleanup-simple-macos` |
+| Linux, 64-bit PC | `photo_cleanup-linux-x64` | `photo_cleanup-simple-linux-x64` |
+| Linux, 64-bit ARM such as a Raspberry Pi 4 or 5 | `photo_cleanup-linux-arm64` | `photo_cleanup-simple-linux-arm64` |
 
 They need Windows 10 or later, macOS 13 Ventura or later, or any 64-bit Linux.
 
@@ -50,6 +51,32 @@ photo_cleanup --gui /path/to/photos      # the browser window, with this folder 
 Use the file name for your computer, for example `photo_cleanup-windows-x64.exe "D:\Photos"` or `./photo_cleanup-macos ~/Pictures`. Read the reports from the preview before running `--apply`. Ctrl+C stops between two files, so everything moved so far can still be undone.
 
 Without a screen, for example over SSH, starting it without arguments asks for the folder in the terminal instead.
+
+## The simple version
+
+`photo_cleanup-simple` is the same program with a page for people who would rather not see file paths or technical terms: large text and buttons, one step at a time, plain words, and the duplicates shown as pictures, so you can see which photos they are. Clicking a picture shows it bigger.
+
+It speaks Danish or English. It picks Danish when the computer or the web browser is set up in Danish, and English otherwise, and the buttons at the top switch between them. It remembers the choice. The folder picker uses the page's language. The window the program runs in follows the computer's language on Linux and macOS, and is in English on Windows. The reports in `_Quarantine/` and the technical details at the bottom of the page stay in English.
+
+It finds and moves exactly the same files as the regular version, into the same `_Quarantine/`, so either version can undo the other's clean-up. On Linux it also offers the desktop's Pictures folder, such as `~/Billeder`, as a single button.
+
+### Setting it up for someone on Linux Mint
+
+1. Put `photo_cleanup-simple-linux-x64` in their home folder, for example in `~/Programmer/`, and make it executable: right-click it, choose **Properties → Permissions** and tick **Allow executing file as program**, or run `chmod +x` on it.
+2. Give it a menu entry: save the lines below as `~/.local/share/applications/billedoprydning.desktop`, with `Exec` set to where the file is. It then shows up in the menu as **Billedoprydning**, where right-clicking it can add it to the desktop or the panel.
+
+   ```ini
+   [Desktop Entry]
+   Type=Application
+   Name=Billedoprydning
+   Comment=Find dobbelte billeder og ryd op
+   Exec=/home/anna/Programmer/photo_cleanup-simple-linux-x64
+   Icon=image-x-generic
+   Terminal=false
+   Categories=Graphics;
+   ```
+
+3. The button for choosing another folder uses `zenity` or `kdialog`. If the page says the computer can't show a window for choosing folders, install zenity: `sudo apt install zenity`.
 
 ## Moving it around
 
@@ -118,9 +145,11 @@ Edit the lists at the top of [main.go](main.go) (`mediaExt`, `disposableParts`, 
 Needs [Go](https://go.dev/dl/) 1.22 or later.
 
 ```bash
-./build.sh        # every file in the table above, into dist/
+./build.sh        # every file in the table above, both versions, into dist/
 go test ./...     # the tests
 ```
+
+The simple version is the same code built with `-ldflags "-X main.edition=simple"`, which serves [simple.html](simple.html) instead of [gui.html](gui.html). Its Danish and English words are both in `simple.html`, and the tests check that every text exists in both languages.
 
 `build.sh` makes a single Mac file for Apple Silicon and Intel when it runs on macOS. The macOS 13 minimum comes from the Go version: building with Go 1.22 supports Macs back to macOS 10.15.
 

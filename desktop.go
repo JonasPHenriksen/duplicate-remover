@@ -62,23 +62,29 @@ func launch(name string, args ...string) error {
 
 var errNoPicker = errors.New("this computer has no folder picker")
 
-// pickFolder shows the system's folder picker and returns the chosen folder,
-// or "" when it was cancelled.
-var pickFolder = func() (string, error) {
-	const title = "Choose the folder to clean up"
+// pickFolder shows the system's folder picker with title on it, and returns the
+// chosen folder, or "" when it was cancelled. On Linux it opens in start, if
+// that is not "".
+var pickFolder = func(title, start string) (string, error) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("osascript", "-e", "activate",
-			"-e", `POSIX path of (choose folder with prompt "`+title+`")`)
+			"-e", `POSIX path of (choose folder with prompt "`+appleScriptQuote.Replace(title)+`")`)
 	case "windows":
-		cmd = exec.Command("powershell", "-NoProfile", "-STA", "-EncodedCommand", encodePowerShell(windowsPicker))
+		cmd = exec.Command("powershell", "-NoProfile", "-STA", "-EncodedCommand", encodePowerShell(windowsPicker(title)))
 	default:
 		if zenity, err := exec.LookPath("zenity"); err == nil {
-			cmd = exec.Command(zenity, "--file-selection", "--directory", "--title="+title)
+			args := []string{"--file-selection", "--directory", "--title=" + title}
+			if start != "" {
+				args = append(args, "--filename="+start+"/") // the slash opens it, rather than its parent
+			}
+			cmd = exec.Command(zenity, args...)
 		} else if kdialog, err := exec.LookPath("kdialog"); err == nil {
-			home, _ := os.UserHomeDir()
-			cmd = exec.Command(kdialog, "--getexistingdirectory", home, "--title", title)
+			if start == "" {
+				start, _ = os.UserHomeDir()
+			}
+			cmd = exec.Command(kdialog, "--getexistingdirectory", start, "--title", title)
 		} else {
 			return "", errNoPicker
 		}
@@ -94,17 +100,22 @@ var pickFolder = func() (string, error) {
 	return strings.TrimRight(string(out), "\r\n"), nil
 }
 
-// windowsPicker shows Windows' folder picker on top of the browser and prints
-// the chosen folder as UTF-8.
-const windowsPicker = `
+// appleScriptQuote escapes text for a string in double quotes in AppleScript.
+var appleScriptQuote = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
+// windowsPicker shows Windows' folder picker, with title on it, on top of the
+// browser and prints the chosen folder as UTF-8.
+func windowsPicker(title string) string {
+	return `
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Choose the folder to clean up'
+$dialog.Description = '` + strings.ReplaceAll(title, "'", "''") + `'
 $dialog.ShowNewFolderButton = $false
 if ($dialog.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($dialog.SelectedPath) }
 `
+}
 
 // encodePowerShell turns a script into what powershell -EncodedCommand takes,
 // base64 of UTF-16LE, which sidesteps every quoting problem.
