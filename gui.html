@@ -10,6 +10,7 @@
   --bg: #f4f5f7; --card: #fff; --text: #1c2230; --muted: #5f6878; --line: #e1e4ea;
   --accent: #2563eb; --accent-hover: #1d4fc4; --accent-soft: #eaf0ff; --on-accent: #fff;
   --good: #187a4c; --good-soft: #e4f4eb; --warn: #8f5500; --warn-soft: #fff3de;
+  --danger: #b42318; --on-danger: #fff;
   --track: #e5e8ee; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 @media (prefers-color-scheme: dark) {
@@ -17,6 +18,7 @@
     --bg: #121418; --card: #1b1e24; --text: #e7eaf0; --muted: #9aa2b2; --line: #2b3039;
     --accent: #6b97ff; --accent-hover: #87abff; --accent-soft: #1d2843; --on-accent: #0b1020;
     --good: #57c592; --good-soft: #142a20; --warn: #f0b45c; --warn-soft: #2c2312; --track: #2a2f38;
+    --danger: #ff8a7a; --on-danger: #1b1e24;
   }
 }
 * { box-sizing: border-box; }
@@ -34,20 +36,40 @@ code { font-family: var(--mono); font-size: .92em; }
 input[type=text] { flex: 1; min-width: 220px; padding: 9px 12px; font: 14px var(--mono); color: inherit;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+input[type=checkbox], input[type=radio] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--card); color: var(--text); cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--muted); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.danger { background: var(--danger); border-color: var(--danger); color: var(--on-danger); font-weight: 600; }
 button:disabled { opacity: .5; cursor: default; }
 button.link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 13px; }
+button.small { font-size: 13px; padding: 5px 10px; }
 .status { margin: 8px 0 0; min-height: 1.5em; color: var(--muted); font-size: 14px; }
 .status.good { color: var(--good); }
 .status.bad { color: var(--warn); }
 .note { padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); margin: 14px 0 0; font-size: 14px; }
 .note.warn { background: var(--warn-soft); color: var(--warn); }
+.note p { margin: 0 0 8px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.note .actions { margin-top: 8px; }
+
+details.options { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+details.options > summary { cursor: pointer; font-weight: 600; }
+#optionsSummary { font-weight: 400; color: var(--muted); }
+.opts fieldset { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
+.opts legend { padding: 0; margin-bottom: 2px; color: var(--muted); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; }
+.opt { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-weight: 600; }
+.explain { margin: 2px 0 6px 24px; color: var(--muted); font-size: 13px; }
+.sub { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0 0 6px 24px; font-size: 14px; }
+.sub label { display: inline-flex; gap: 6px; align-items: center; }
+.opts .row { margin: 0 0 4px 24px; }
+.opts input[type=text] { padding: 6px 10px; font-size: 13px; }
+.folders { list-style: none; margin: 0 0 4px 24px; padding: 0; font-size: 13px; }
+.folders li { padding: 2px 0; }
+.opts .status { margin: 0 0 0 24px; min-height: 0; }
 
 .steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .steps span { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--track); color: var(--muted); }
@@ -68,12 +90,29 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .section h3 { margin: 0 0 4px; font-size: 15px; }
 .section h3 label { display: inline-flex; gap: 8px; align-items: center; }
 .section > p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
-.group { padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.group { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--line); }
 .group:last-child { border-bottom: 0; }
+.group.off .members { opacity: .55; }
+.pick { display: inline-flex; gap: 8px; align-items: center; padding-top: 3px; }
+.members { flex: 1; min-width: 0; }
 .path { font: 13px var(--mono); overflow-wrap: anywhere; }
 .keep { color: var(--good); }
 .copy { color: var(--muted); padding-left: 20px; }
 .why { color: var(--muted); font-size: 13px; }
+.badge { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft);
+  color: var(--accent); font-size: 12px; }
+.thumb { flex: none; display: block; padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  background: var(--track); cursor: zoom-in; }
+.thumb.small { width: 48px; height: 48px; }
+.thumb.big { width: 140px; height: 140px; }
+span.thumb { cursor: default; }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.alike { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.alike.on { border-color: var(--accent); }
+.cards { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
+.member { width: 142px; font-size: 13px; }
+.member .path { font-size: 12px; }
+.member.kept .thumb { outline: 3px solid var(--good); outline-offset: 1px; }
 .type { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .type:last-child { border-bottom: 0; }
 .type label { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
@@ -83,7 +122,10 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 details > summary { cursor: pointer; color: var(--muted); }
 #log { margin-top: 10px; max-height: 280px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 #log .warn { color: var(--warn); }
-#closed { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+#viewer { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; padding: 16px; background: #0b0b0c; }
+#viewer img { max-width: 100%; max-height: calc(100vh - 90px); object-fit: contain; }
+#closed { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
   background: var(--bg); text-align: center; padding: 24px; }
 [hidden] { display: none !important; }
 </style>
@@ -94,7 +136,7 @@ details > summary { cursor: pointer; color: var(--muted); }
     <div>
       <h1>Photo cleanup</h1>
       <p>Moves duplicate photos and videos, and files that aren't photos or videos, into a <code>_Quarantine</code>
-        folder. Nothing is deleted, and everything can be put back.</p>
+        folder. Nothing is deleted unless you empty it, and everything can be put back until then.</p>
     </div>
     <button id="quit">Quit</button>
   </header>
@@ -106,9 +148,87 @@ details > summary { cursor: pointer; color: var(--muted); }
       <button id="pick">Choose…</button>
     </div>
     <p class="status" id="pathStatus"></p>
-    <div class="actions">
+
+    <details class="options" id="options">
+      <summary>Options <span id="optionsSummary"></span></summary>
+      <div class="opts">
+        <fieldset>
+          <legend>What to look for</legend>
+          <label class="opt"><input type="checkbox" id="optOther" checked> Files that aren't photos or videos</label>
+          <p class="explain">Documents, sidecar files and the like move to _Quarantine/not-media. Untick to look
+            only for duplicates.</p>
+          <label class="opt"><input type="checkbox" id="optSameImage"> The same picture with other tags</label>
+          <p class="explain">JPEGs whose pictures are identical, but whose tags differ, such as dates, ratings or
+            captions a photo app wrote, count as duplicates too. The copy with the most tags is preferred. Copies
+            turned another way, or with other colour profiles, don't count.</p>
+          <label class="opt"><input type="checkbox" id="optSimilar"> Photos that look alike</label>
+          <p class="explain">Also lists copies at another size or quality, and shots taken a moment apart. Slower,
+            as every photo is opened, and only for JPEG, PNG and GIF. Nothing in the list moves unless you tick it.</p>
+          <div class="sub" id="similarHow" hidden>
+            <label><input type="radio" name="similar" value="close" checked> Close copies only</label>
+            <label><input type="radio" name="similar" value="loose"> Also similar shots</label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Which copy stays</legend>
+          <label class="opt"><input type="checkbox" id="optNewest"> Keep the newest copy</label>
+          <p class="explain">When nothing else decides, the copy with the latest date stays, rather than the earliest.</p>
+          <div class="opt">Folders whose copies always stay</div>
+          <p class="explain">Copies of photos and videos in these folders, inside the one you clean, never move, and
+            stay rather than their copies elsewhere.</p>
+          <ul class="folders" id="keepList"></ul>
+          <div class="row">
+            <input type="text" id="keepInput" placeholder="A folder inside the one you clean" spellcheck="false" autocomplete="off">
+            <button class="small" id="keepChoose">Choose…</button><button class="small" id="keepAdd">Add</button>
+          </div>
+          <p class="status bad" id="keepNote"></p>
+          <div class="opt"><label for="optBackups">More backup folder names</label></div>
+          <p class="explain">Copies in folders with these names move before others, as they do in Backup, DCIM,
+            Camera Roll, Downloads, WhatsApp Images and the like. Separate the names with commas.</p>
+          <div class="row"><input type="text" id="optBackups" placeholder="For example: Old phone, Gamle billeder"
+            spellcheck="false" autocomplete="off"></div>
+          <div class="opt">Reference folder</div>
+          <p class="explain">Photos and videos already in this folder, outside the one you clean, count as kept: all
+            their copies in the folder you clean move. Nothing in the reference folder changes.</p>
+          <div class="row">
+            <input type="text" id="optReference" placeholder="None" spellcheck="false" autocomplete="off">
+            <button class="small" id="referenceChoose">Choose…</button>
+          </div>
+          <p class="status bad" id="referenceNote"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Where to look</legend>
+          <div class="opt">Folders to leave out</div>
+          <p class="explain">These folders, inside the one you clean, are never looked in, so nothing in them moves.</p>
+          <ul class="folders" id="skipList"></ul>
+          <div class="row">
+            <input type="text" id="skipInput" placeholder="A folder inside the one you clean" spellcheck="false" autocomplete="off">
+            <button class="small" id="skipChoose">Choose…</button><button class="small" id="skipAdd">Add</button>
+          </div>
+          <p class="status bad" id="skipNote"></p>
+        </fieldset>
+        <fieldset>
+          <legend>After moving</legend>
+          <label class="opt"><input type="checkbox" id="optRemoveEmpty"> Remove folders left empty</label>
+          <p class="explain">Folders the move empties are removed. Undo makes them again.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Speed</legend>
+          <label class="opt"><input type="checkbox" id="optParallel" checked> Read several files at once</label>
+          <p class="explain">Faster on most disks. Untick it for spinning hard disks, which read one file at a time
+            faster. On Linux they are noticed by themselves.</p>
+          <label class="opt"><input type="checkbox" id="optCache"> Remember fingerprints</label>
+          <p class="explain">Keeps what it learns about each file in _Quarantine, so that the next look through this
+            folder only reads the files that are new or changed.</p>
+        </fieldset>
+        <div class="actions"><button class="link" id="optionsReset">Back to the defaults</button></div>
+      </div>
+    </details>
+
+    <div class="actions" id="chooseActions">
       <button class="primary" id="scan" disabled>Find duplicates</button>
       <button id="undo" hidden>Undo the earlier clean-up</button>
+      <button id="empty" hidden>Empty _Quarantine…</button>
     </div>
   </section>
 
@@ -129,6 +249,10 @@ details > summary { cursor: pointer; color: var(--muted); }
     <div id="log"></div>
   </details>
 </main>
+<div id="viewer" hidden>
+  <img alt="">
+  <button id="viewerClose">Close</button>
+</div>
 <div id="closed" hidden>
   <div><h2>photo_cleanup has closed</h2><p>You can close this tab. Start photo_cleanup again to carry on.</p></div>
 </div>
@@ -179,6 +303,139 @@ async function api(path, body) {
   return res.json();
 }
 
+// ---- options ----
+
+// The options as the program takes them; see options in options.go.
+function currentOptions() {
+  return {
+    duplicatesOnly: !$('optOther').checked,
+    sameImage: $('optSameImage').checked,
+    similar: $('optSimilar').checked ? document.querySelector('input[name=similar]:checked').value : '',
+    keepNewest: $('optNewest').checked,
+    prefer: keepFolders.slice(),
+    backups: $('optBackups').value.split(',').map((s) => s.trim()).filter(Boolean),
+    reference: $('optReference').value.trim(),
+    skip: skipFolders.slice(),
+    removeEmpty: $('optRemoveEmpty').checked,
+    oneAtATime: !$('optParallel').checked,
+    cache: $('optCache').checked,
+  };
+}
+
+let keepFolders = [], skipFolders = [];
+
+function setTicks(o) {
+  $('optOther').checked = !o.duplicatesOnly;
+  $('optSameImage').checked = !!o.sameImage;
+  $('optSimilar').checked = !!o.similar;
+  for (const r of document.querySelectorAll('input[name=similar]')) r.checked = r.value === (o.similar || 'close');
+  $('similarHow').hidden = !o.similar;
+  $('optNewest').checked = !!o.keepNewest;
+  $('optBackups').value = (o.backups || []).join(', ');
+  $('optRemoveEmpty').checked = !!o.removeEmpty;
+  $('optParallel').checked = !o.oneAtATime;
+  $('optCache').checked = !!o.cache;
+}
+
+// The ticks and backup names are remembered in a cookie, which outlives the
+// page's own storage: the next run gets another port, and cookies go by the
+// computer's address alone. The folders are not, as they belong to one folder.
+function loadOptions() {
+  const m = document.cookie.match(/(?:^|;\s*)photo_cleanup_options=([^;]*)/);
+  if (m) {
+    try { setTicks(JSON.parse(decodeURIComponent(m[1]))); } catch (e) { /* forget it */ }
+  }
+  showOptions();
+}
+
+function saveOptions() {
+  const o = currentOptions();
+  delete o.prefer; delete o.skip; delete o.reference;
+  document.cookie = `photo_cleanup_options=${encodeURIComponent(JSON.stringify(o))}; max-age=34560000; path=/; samesite=strict`;
+  showOptions();
+}
+
+// optionsText names the options that differ from the defaults.
+function optionsText(o) {
+  const parts = [];
+  if (o.duplicatesOnly) parts.push('duplicates only');
+  if (o.sameImage) parts.push('same picture with other tags');
+  if (o.similar) parts.push(o.similar === 'loose' ? 'look-alikes and similar shots' : 'look-alikes');
+  if (o.keepNewest) parts.push('keep the newest');
+  if (o.prefer && o.prefer.length) parts.push(count(o.prefer.length, 'folder') + ' to keep');
+  if (o.backups && o.backups.length) parts.push('more backup names');
+  if (o.reference) parts.push('a reference folder');
+  if (o.skip && o.skip.length) parts.push(count(o.skip.length, 'folder') + ' left out');
+  if (o.removeEmpty) parts.push('remove empty folders');
+  if (o.oneAtATime) parts.push('one file at a time');
+  if (o.cache) parts.push('remember fingerprints');
+  return parts.join(', ');
+}
+
+function showOptions() {
+  for (const [id, folders] of [['keepList', keepFolders], ['skipList', skipFolders]]) {
+    $(id).replaceChildren(...folders.map((f, i) => el('li', {}, el('span', { class: 'path' }, f), ' ',
+      el('button', { class: 'link', onclick: () => { folders.splice(i, 1); showOptions(); } }, 'Remove'))));
+  }
+  const text = optionsText(currentOptions());
+  $('optionsSummary').textContent = text ? '· ' + text : '';
+  $('similarHow').hidden = !$('optSimilar').checked;
+}
+
+// inside reports whether a folder for the options is inside the chosen one, as
+// far as the page can tell: the program checks again.
+function inside(p) {
+  if (!/^([A-Za-z]:)?[\\/]/.test(p)) return true; // relative to it
+  const root = checked && checked.ok ? checked.path.replace(/[\\/]+$/, '') : '';
+  return root !== '' && (p.startsWith(root + '/') || p.startsWith(root + '\\'));
+}
+
+function addFolder(kind, p) {
+  p = p.trim();
+  if (!p) return;
+  const folders = kind === 'keep' ? keepFolders : skipFolders;
+  if (!inside(p)) {
+    $(kind + 'Note').textContent = 'That folder is not inside the folder you clean.';
+    return;
+  }
+  $(kind + 'Note').textContent = '';
+  $(kind + 'Input').value = '';
+  if (!folders.includes(p)) folders.push(p);
+  showOptions();
+}
+
+async function pickFor(kind) {
+  let r;
+  try { r = await api('pick', { purpose: kind, start: $('path').value }); } catch (e) { showError(e); return; }
+  if (r.unavailable) {
+    $(kind + 'Note').textContent = "This computer has no folder picker. Paste the folder's location instead.";
+  } else if (r.path && kind === 'reference') {
+    $('optReference').value = r.path;
+    showOptions();
+  } else if (r.path) {
+    addFolder(kind, r.path);
+  }
+}
+
+for (const kind of ['keep', 'skip']) {
+  $(kind + 'Choose').addEventListener('click', () => pickFor(kind));
+  $(kind + 'Add').addEventListener('click', () => addFolder(kind, $(kind + 'Input').value));
+  $(kind + 'Input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addFolder(kind, $(kind + 'Input').value); });
+}
+$('referenceChoose').addEventListener('click', () => pickFor('reference'));
+$('optReference').addEventListener('input', showOptions);
+for (const box of document.querySelectorAll('#options input[type=checkbox], #options input[type=radio]')) {
+  box.addEventListener('change', saveOptions);
+}
+$('optBackups').addEventListener('change', saveOptions);
+$('optionsReset').addEventListener('click', () => {
+  setTicks({});
+  keepFolders.length = 0;
+  skipFolders.length = 0;
+  $('optReference').value = '';
+  saveOptions();
+});
+
 // ---- 1. choosing the folder ----
 
 let checked = null;  // what the program said about the folder in the box
@@ -192,7 +449,14 @@ async function check() {
     try { answer = await api('check', { path }); } catch (e) { answer = null; }
   }
   if ($('path').value !== path) return;  // typed on meanwhile
+  const before = checked && checked.ok ? checked.path : null;
   checked = answer;
+  if (before && checked && checked.ok && checked.path !== before) {
+    // Folders to keep and to leave out belong to the folder they are in.
+    keepFolders = keepFolders.filter(inside);
+    skipFolders = skipFolders.filter(inside);
+    showOptions();
+  }
   showCheck();
 }
 
@@ -202,8 +466,8 @@ function showCheck() {
   st.className = 'status';
   st.textContent = '';
   $('scan').disabled = busy || !ok;
-  $('undo').hidden = !(ok && checked.journal > 0);
-  $('undo').disabled = busy;
+  $('undo').hidden = $('empty').hidden = !(ok && checked.journal > 0);
+  $('undo').disabled = $('empty').disabled = busy;
   if (!$('path').value.trim() || !checked) return;
   if (!ok) {
     st.classList.add('bad');
@@ -219,6 +483,7 @@ function showCheck() {
 }
 
 $('path').addEventListener('input', () => {
+  takeBackEmpty();
   clearTimeout(checkTimer);
   checkTimer = setTimeout(check, 250);
 });
@@ -239,8 +504,12 @@ $('pick').addEventListener('click', async () => {
   } catch (e) { showError(e); }
   $('pick').disabled = busy;
 });
-$('scan').addEventListener('click', () => start('scan', { path: $('path').value }));
+$('scan').addEventListener('click', () => {
+  scanOptions = currentOptions();
+  start('scan', { path: $('path').value, options: scanOptions });
+});
 $('undo').addEventListener('click', () => start('undo', { path: $('path').value }));
+$('empty').addEventListener('click', () => askEmpty($('path').value, $('chooseActions')));
 $('stop').addEventListener('click', () => {
   $('stop').disabled = true;
   $('stop').textContent = 'Stopping…';
@@ -251,23 +520,76 @@ $('quit').addEventListener('click', () => {
   showClosed();
 });
 
+// starting holds off further clicks from when a job is asked for until the
+// page has heard it began, startedJob being its number.
+let starting = false, startedJob = 0;
+
 async function start(kind, body) {
+  if (starting || busy) return;
+  takeBackEmpty();
+  starting = true;
+  startedJob = Infinity;
   $('review').hidden = true;
   $('result').hidden = true;
-  try { await api(kind, body); } catch (e) { showError(e); return; }
+  try {
+    startedJob = (await api(kind, body)).job;
+  } catch (e) {
+    starting = false;
+    showError(e);
+    return;
+  }
   poll();
+}
+
+// askEmpty asks, in place of the buttons in where, whether to delete for good
+// what clean-ups moved into the folder's _Quarantine, saying which folder and
+// how many files. The program deletes only if that is still how many there
+// are. Starting anything else, or typing another folder, takes the question back.
+let takeBackEmpty = () => {};
+async function askEmpty(folder, where) {
+  takeBackEmpty();
+  let checked = null;
+  try { checked = await api('check', { path: folder }); } catch (e) { /* nothing to delete, then */ }
+  const n = checked && checked.ok ? checked.journal : 0;
+  const box = el('div', { class: 'note warn' },
+    el('p', {}, n > 0
+      ? `This deletes, for good, the ${count(n, 'file')} that clean-ups moved into the _Quarantine of ${checked.path}. Undo cannot put them back afterwards. The lists of what was moved stay.`
+      : 'There is nothing in _Quarantine to delete.'),
+    actions(n > 0 ? button('Delete them for good', () => start('empty', { path: folder, expect: n }), 'danger') : null,
+      button('Cancel', () => takeBackEmpty())));
+  where.hidden = true;
+  where.after(box);
+  takeBackEmpty = () => {
+    box.remove();
+    where.hidden = false;
+    takeBackEmpty = () => {};
+  };
 }
 
 // ---- progress ----
 
 const phases = {
   scan: ['Looking through the folder', 'Find files'],
+  reference: ['Looking through the reference folder', 'Find files'],
   fingerprint: ['Fingerprinting files of the same size', 'Fingerprint'],
   hash: ['Comparing file contents', 'Compare'],
+  image: ['Reading the tags of JPEGs', 'Without tags'],
+  imagequick: ['Fingerprinting pictures without their tags', 'Without tags'],
+  imagehash: ['Comparing pictures without their tags', 'Without tags'],
+  look: ['Looking at how photos look', 'Look-alikes'],
   move: ['Moving files to _Quarantine', 'Move'],
   undo: ['Putting files back', 'Undo'],
+  empty: ['Deleting the files in _Quarantine', 'Delete'],
 };
-const jobPhases = { scan: ['scan', 'fingerprint', 'hash'] };
+const countsBytes = (phase) => phase === 'hash' || phase === 'imagehash';
+let scanOptions = null;  // the options of the running scan, if this page started it
+
+function scanSteps(phase) {
+  const steps = ['Find files', 'Fingerprint', 'Compare'];
+  if ((scanOptions && scanOptions.sameImage) || phase.startsWith('image')) steps.push('Without tags');
+  if ((scanOptions && scanOptions.similar) || phase === 'look') steps.push('Look-alikes');
+  return steps;
+}
 
 let job = -1, since = 0, shown = -1, failures = 0, pollTimer = 0, prefilled = false;
 let jobStart = 0, phase = '', phaseStart = 0;
@@ -283,6 +605,8 @@ async function poll() {
     pollTimer = setTimeout(poll, 1000);
     return;
   }
+  pollTimer = setTimeout(poll, s.busy ? 250 : 2000);
+  if (starting && s.job >= startedJob) starting = false;
   if (s.job !== job) {
     job = s.job;
     $('log').replaceChildren();
@@ -300,7 +624,6 @@ async function poll() {
     shown = s.job;
     showResultOf(s.result);
   }
-  pollTimer = setTimeout(poll, s.busy ? 250 : 2000);
 }
 
 function showProgress(s) {
@@ -316,14 +639,14 @@ function showProgress(s) {
     return;
   }
   if (s.phase !== phase) { phase = s.phase; phaseStart = Date.now(); }
-  const [title] = phases[s.phase] || ['Working'];
+  const [title, step] = phases[s.phase] || ['Working', ''];
   $('progressTitle').textContent = title + '…';
 
-  const steps = jobPhases[s.kind] || [];
-  const at = steps.indexOf(s.phase);
+  const steps = s.kind === 'scan' ? scanSteps(s.phase) : [];
+  const at = steps.indexOf(step);
   $('steps').hidden = steps.length < 2;
   $('steps').replaceChildren(...steps.map((p, i) =>
-    el('span', { class: i === at ? 'now' : i < at ? 'past' : '' }, (i < at ? '✓ ' : '') + phases[p][1])));
+    el('span', { class: i === at ? 'now' : i < at ? 'past' : '' }, (i < at ? '✓ ' : '') + p)));
 
   const bar = $('bar');
   const share = s.total > 0 ? Math.min(1, s.done / s.total) : 0;
@@ -332,8 +655,8 @@ function showProgress(s) {
   bar.setAttribute('aria-valuenow', Math.floor(100 * share));
 
   let text;
-  if (s.phase === 'scan') text = count(s.done, 'file') + ' found so far';
-  else if (s.phase === 'hash') text = `${human(s.done)} of ${human(s.total)}`;
+  if (s.phase === 'scan' || s.phase === 'reference') text = count(s.done, 'file') + ' found so far';
+  else if (countsBytes(s.phase)) text = `${human(s.done)} of ${human(s.total)}`;
   else text = `${s.done.toLocaleString()} of ${count(s.total, 'file')}`;
   if (s.total > 0) text += ` · ${Math.floor(100 * share)}%`;
   $('progressText').textContent = text;
@@ -352,7 +675,7 @@ function showProgress(s) {
 function addLog(lines) {
   const log = $('log');
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
-  for (const l of lines) log.append(el('div', l.warn ? { class: 'warn' } : {}, l.text || ' '));
+  for (const l of lines) log.append(el('div', l.warn ? { class: 'warn' } : {}, l.text || ' '));
   while (log.childElementCount > 3000) log.firstElementChild.remove();
   if (lines.length && atEnd) log.scrollTop = log.scrollHeight;
 }
@@ -363,12 +686,13 @@ function showResultOf(r) {
   if (r.kind === 'preview') showReview(r);
   else if (r.kind === 'moved') showMoved(r);
   else if (r.kind === 'undone') showUndone(r);
-  else if (r.kind === 'stopped') showCard([el('h2', {}, 'Stopped'), el('p', {}, 'The scan was stopped before it finished. Nothing was moved.'), actions(button('OK', reset, true))]);
+  else if (r.kind === 'emptied') showEmptied(r);
+  else if (r.kind === 'stopped') showCard([el('h2', {}, 'Stopped'), el('p', {}, 'The scan was stopped before it finished. Nothing was moved.'), actions(button('OK', reset, 'primary'))]);
   else showError(new Error(r.error || 'Something went wrong.'));
 }
 
-function button(label, onclick, primary) {
-  return el('button', { class: primary ? 'primary' : '', onclick }, label);
+function button(label, onclick, cls) {
+  return el('button', { class: cls || '', onclick }, label);
 }
 function actions(...buttons) { return el('div', { class: 'actions' }, buttons); }
 function tile(big, small) { return el('div', { class: 'tile' }, el('b', {}, big), el('span', {}, small)); }
@@ -381,7 +705,7 @@ function showCard(parts) {
 }
 
 function showError(e) {
-  showCard([el('h2', {}, 'Something went wrong'), el('p', { class: 'note warn' }, e.message || String(e)), actions(button('OK', reset, true))]);
+  showCard([el('h2', {}, 'Something went wrong'), el('p', { class: 'note warn' }, e.message || String(e)), actions(button('OK', reset, 'primary'))]);
 }
 
 function reset() {
@@ -391,24 +715,96 @@ function reset() {
   check();
 }
 
+// picture is a small picture of member m of group g of a set ("groups" or
+// "similar"), which opens bigger, or an empty frame for what is no photo.
+const shownPictures = /\.(jpe?g|jpe|jfif|png|gif|webp|bmp|dib|avif|heic|heif)$/i;
+function picture(set, g, m, path, size) {
+  if (!shownPictures.test(path)) return el('span', { class: 'thumb ' + size });
+  const src = `/api/picture?token=${encodeURIComponent(token)}&job=${shown}&set=${set}&g=${g}&m=${m}`;
+  const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', src });  // lazy before src, or it loads at once
+  const b = el('button', { class: 'thumb ' + size, title: 'See it bigger', onclick: () => openViewer(src) }, img);
+  img.addEventListener('error', () => b.replaceWith(el('span', { class: 'thumb ' + size })));
+  return b;
+}
+
+function openViewer(src) {
+  $('viewer').querySelector('img').src = src;
+  $('viewer').hidden = false;
+  $('viewerClose').focus();
+}
+function closeViewer() {
+  $('viewer').hidden = true;
+  $('viewer').querySelector('img').removeAttribute('src');
+}
+$('viewer').addEventListener('click', (e) => { if (e.target.tagName !== 'IMG') closeViewer(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('viewer').hidden) closeViewer(); });
+
 let review = null;  // the preview being shown
+// What the review changes in the plan: see choices in quarantine.go.
+let skipGroups = new Set(), keepIn = new Map(), moveAlike = new Set(), keepAlike = new Map();
+let current = { dup: new Map(), alike: new Map() };  // what moves: see movers
+let dupDraws = [], alikeDraws = [];  // draw the groups again as choices change
+
+// members lists a group's files, the one that stays first. stays is for files
+// that may not move: in the reference folder, or in a folder to keep.
+function members(g) {
+  const dims = g.dims || [];
+  return [{ path: g.keep, size: g.sizes[0], stays: !!g.stays, ref: !!g.ref, dims: dims[0] },
+    ...g.copies.map((c, i) => ({ path: c, size: g.sizes[i + 1], stays: false, ref: false, dims: dims[i + 1] }))];
+}
+
+const dupsOn = () => !$('dups') || $('dups').checked;
+const staysWhy = (m) => m.ref ? 'in the reference folder' : 'in a folder to keep';
+
+// movers works out what the choices move, by path and size, each file once: a
+// photo that a duplicate group moves and a ticked look-alike group too moves
+// with its duplicates, as it does in the program.
+function movers() {
+  const dup = new Map(), alike = new Map();
+  if (dupsOn()) {
+    review.groups.forEach((g, i) => {
+      if (skipGroups.has(i)) return;
+      const kept = keepIn.get(i) || 0;
+      members(g).forEach((m, j) => { if (j !== kept && !m.stays) dup.set(m.path, m.size); });
+    });
+  }
+  review.similar.forEach((g, i) => {
+    if (!moveAlike.has(i)) return;
+    const kept = keepAlike.get(i) || 0;
+    members(g).forEach((m, j) => { if (j !== kept && !m.stays && !dup.has(m.path)) alike.set(m.path, m.size); });
+  });
+  return { dup, alike };
+}
+
+function refresh() {
+  current = movers();
+  for (const draw of [...dupDraws, ...alikeDraws]) draw();
+  updateMove();
+}
 
 function showReview(r) {
   review = r;
-  const parts = [
-    el('h2', {}, '2. Check what will move'),
-    el('div', { class: 'tiles' },
-      tile(count(r.dupFiles, 'duplicate'), human(r.dupBytes) + ' of extra copies'),
-      tile(count(r.otherFiles, 'other file'), human(r.otherBytes) + " that aren't photos or videos"),
-      tile(r.media.toLocaleString(), 'photos and videos looked at'),
-      tile((r.system + r.skipped).toLocaleString(), 'system files and links left alone')),
+  skipGroups = new Set(); keepIn = new Map(); moveAlike = new Set(); keepAlike = new Map();
+  current = { dup: new Map(), alike: new Map() };
+  dupDraws = []; alikeDraws = [];
+  const tiles = [
+    tile(count(r.dupFiles, 'duplicate'), human(r.dupBytes) + ' of extra copies'),
+    tile(count(r.otherFiles, 'other file'), human(r.otherBytes) + " that aren't photos or videos"),
+    tile(r.media.toLocaleString(), 'photos and videos looked at'),
+    tile((r.system + r.skipped).toLocaleString(), 'system files and links left alone'),
   ];
+  if (r.options.duplicatesOnly) tiles[1] = tile('Left alone', "files that aren't photos or videos");
+  if (r.options.similar) tiles.splice(2, 0, tile(count(r.similar.length + r.moreSimilar, 'group'), 'of photos that look alike'));
+  const parts = [el('h2', {}, '2. Check what will move'), el('div', { class: 'tiles' }, tiles)];
+  const used = optionsText(r.options);
+  if (used) parts.push(el('p', { class: 'note' }, 'Options: ' + used + '.'));
+  if (r.reference) parts.push(el('p', { class: 'note' }, `Photos and videos in the reference folder ${r.reference} count as kept, so their copies here move. Nothing in it changes.`));
   if (r.journal > 0) {
     parts.push(el('p', { class: 'note' }, `An earlier clean-up already moved ${count(r.journal, 'file')} into _Quarantine here. Moving more adds to them, and Undo puts back all of them.`));
   }
-  if (r.dupFiles + r.otherFiles === 0) {
+  if (r.dupFiles + r.otherFiles === 0 && r.similar.length === 0) {
     parts.push(el('p', { class: 'big good' }, "✓ Nothing to clean up: no duplicates, and nothing that isn't a photo or video."));
-    parts.push(actions(button('Choose another folder', reset, true)));
+    parts.push(actions(button('Choose another folder', reset, 'primary')));
     $('result').hidden = true;
     $('review').replaceChildren(...parts);
     $('review').hidden = false;
@@ -417,17 +813,26 @@ function showReview(r) {
 
   if (r.dupFiles > 0) {
     const groups = el('div', {});
-    const list = (n) => groups.replaceChildren(...r.groups.slice(0, n).map((g) => el('div', { class: 'group' },
-      el('div', { class: 'keep' }, '✓ ', el('span', { class: 'path' }, g.keep), ' ', el('span', { class: 'why' }, `stays (${g.reason}) · ${human(g.size)}`)),
-      g.copies.map((c) => el('div', { class: 'copy' }, '→ ', el('span', { class: 'path' }, c))))));
-    list(15);
-    const all = r.groups.length > 15 ? el('button', { class: 'link', onclick: (e) => { list(r.groups.length); e.target.remove(); } }, `Show all ${r.groups.length.toLocaleString()} groups`) : null;
+    const list = (n) => {
+      dupDraws = [];
+      groups.replaceChildren(...r.groups.slice(0, n).map(groupRow));
+    };
+    list(15);  // drawn by the refresh at the end
+    const all = r.groups.length > 15 ? el('button', { class: 'link', onclick: (e) => { list(r.groups.length); refresh(); e.target.remove(); } }, `Show all ${r.groups.length.toLocaleString()} groups`) : null;
     parts.push(el('div', { class: 'section' },
-      el('h3', {}, el('label', {}, el('input', { type: 'checkbox', id: 'dups', checked: true, onchange: updateMove }),
+      el('h3', {}, el('label', {}, el('input', { type: 'checkbox', id: 'dups', checked: true, onchange: refresh }),
         `Duplicates: ${count(r.dupFiles, 'extra copy', 'extra copies')}, ${human(r.dupBytes)}`)),
-      el('p', {}, 'Byte-for-byte identical files. The copy marked ✓ stays where it is, and the others move to _Quarantine/duplicates.'),
+      el('p', {}, 'Identical files. The copy marked ✓ stays where it is, and the others move to _Quarantine/duplicates. Untick a group to leave it alone, or keep another copy instead.'),
       groups, all,
-      r.moreGroups > 0 ? el('p', { class: 'why' }, `…and ${count(r.moreGroups, 'more group')}, listed in duplicates.csv.`) : null));
+      r.moreGroups > 0 ? el('p', { class: 'why' }, `…and ${count(r.moreGroups, 'more group')}, listed in duplicates.csv, which move as suggested.`) : null));
+  }
+
+  if (r.similar.length > 0) {
+    parts.push(el('div', { class: 'section' },
+      el('h3', {}, `Photos that look alike: ${count(r.similar.length + r.moreSimilar, 'group')}`),
+      el('p', {}, 'Not identical, so nothing here moves unless you tick it. The photo marked ✓ has the most pixels; keep another one instead if it is better. The others move to _Quarantine/similar.'),
+      r.similar.map(alikeGroup),
+      r.moreSimilar > 0 ? el('p', { class: 'why' }, `…and ${count(r.moreSimilar, 'more group')}, listed in similar.csv.`) : null));
   }
 
   if (r.otherFiles > 0) {
@@ -444,31 +849,104 @@ function showReview(r) {
       })));
   }
 
-  parts.push(el('p', { class: 'note' }, `Files move into ${r.quarantine}, keeping the folders they came from. Nothing is deleted, and Undo puts everything back. The lists are also saved there as duplicates.csv and not-media.csv.`));
+  parts.push(el('p', { class: 'note' }, `Files move into ${r.quarantine}, keeping the folders they came from. Nothing is deleted, and Undo puts everything back. The lists are also saved there as CSV files.`));
   parts.push(actions(el('button', { class: 'primary', id: 'move', onclick: move }), button('Open the lists', () => reveal('quarantine')), button('Choose another folder', reset)));
   $('result').hidden = true;
   $('review').replaceChildren(...parts);
   $('review').hidden = false;
-  updateMove();
+  refresh();
+}
+
+// groupRow shows group i of the duplicates: a tick to move its copies or leave
+// them, and which copy stays, which can be changed.
+function groupRow(g, i) {
+  const row = el('div', { class: 'group' });
+  const pic = picture('groups', i, 0, g.keep, 'small');
+  const keepThis = (j) => () => { if (j === 0) keepIn.delete(i); else keepIn.set(i, j); refresh(); };
+  const draw = () => {
+    const kept = keepIn.get(i) || 0, off = skipGroups.has(i) || !dupsOn();
+    row.className = 'group' + (off ? ' off' : '');
+    const box = el('input', { type: 'checkbox', checked: !skipGroups.has(i), title: "Move this group's copies",
+      onchange: (e) => { if (e.target.checked) skipGroups.delete(i); else skipGroups.add(i); refresh(); } });
+    row.replaceChildren(el('label', { class: 'pick' }, box), pic, el('div', { class: 'members' }, members(g).map((m, j) => {
+      const path = el('span', { class: 'path' }, m.path);
+      if (j === kept && current.alike.has(m.path)) {
+        return el('div', { class: 'copy' }, '→ ', path, ' ', el('span', { class: 'why' }, 'moves with the look-alikes below'));
+      }
+      if (j === kept) {
+        return el('div', { class: 'keep' }, '✓ ', path, ' ',
+          el('span', { class: 'why' }, `stays (${j === 0 ? g.reason : 'chosen by you'}) · ${human(m.size)}`),
+          g.kind === 'tags' ? el('span', { class: 'badge' }, 'same picture, other tags') : null,
+          m.stays ? el('span', { class: 'badge' }, staysWhy(m)) : null);
+      }
+      if (m.stays) {
+        return el('div', { class: 'copy' }, '◇ ', path, ' ', el('span', { class: 'why' }, staysWhy(m) + ', never moved '),
+          el('button', { class: 'link', onclick: keepThis(j) }, 'keep this one instead'));
+      }
+      return el('div', { class: 'copy' }, off ? '· ' : '→ ', path, ' ', off ? el('span', { class: 'why' }, 'stays ') : null,
+        el('button', { class: 'link', onclick: keepThis(j) }, 'keep this one instead'));
+    })));
+  };
+  dupDraws.push(draw);
+  return row;
+}
+
+// alikeGroup shows group i of the look-alikes side by side, with a tick to move
+// all but the one to keep, which can be changed.
+function alikeGroup(g, i) {
+  const box = el('div', { class: 'alike' });
+  const ms = members(g);
+  const pics = ms.map((m, j) => picture('similar', i, j, m.path, 'big'));
+  const keepThis = (j) => () => { if (j === 0) keepAlike.delete(i); else keepAlike.set(i, j); refresh(); };
+  const draw = () => {
+    const kept = keepAlike.get(i) || 0, on = moveAlike.has(i);
+    box.className = 'alike' + (on ? ' on' : '');
+    box.replaceChildren(
+      el('label', { class: 'pick' }, el('input', { type: 'checkbox', checked: on,
+        onchange: (e) => { if (e.target.checked) moveAlike.add(i); else moveAlike.delete(i); refresh(); } }),
+        'Move the others to _Quarantine/similar'),
+      el('div', { class: 'cards' }, ms.map((m, j) => el('div', { class: 'member' + (j === kept ? ' kept' : '') },
+        pics[j],
+        el('div', { class: 'path' }, m.path),
+        el('div', { class: 'why' }, `${m.dims} · ${human(m.size)}`),
+        current.dup.has(m.path) ? el('div', { class: 'why' }, 'moves with its duplicates')
+          : j === kept ? el('div', { class: 'keep' }, `✓ ${on ? 'stays' : 'would stay'} (${j === 0 ? g.reason : 'chosen by you'})`)
+          : m.stays ? [el('div', { class: 'why' }, staysWhy(m)), el('button', { class: 'link', onclick: keepThis(j) }, 'keep this one instead')]
+          : el('button', { class: 'link', onclick: keepThis(j) }, 'keep this one instead')))));
+  };
+  alikeDraws.push(draw);
+  return box;
 }
 
 function typeName(t) {
   return t === '(empty)' ? 'Empty files' : t === '(none)' ? 'No extension' : '.' + t;
 }
 
+// selection is what the review leaves to move, as the move takes it, and how much.
 function selection() {
-  const dups = $('dups');
-  const skipDuplicates = !!dups && !dups.checked;
+  const skipDuplicates = !dupsOn();
+  let files = current.dup.size + current.alike.size, bytes = 0;
+  for (const size of [...current.dup.values(), ...current.alike.values()]) bytes += size;
+  if (!skipDuplicates) {  // the groups beyond those listed move as suggested
+    let listedFiles = 0, listedBytes = 0;
+    for (const g of review.groups) for (const m of members(g).slice(1)) { listedFiles++; listedBytes += m.size; }
+    files += review.dupFiles - listedFiles;
+    bytes += review.dupBytes - listedBytes;
+  }
   const skipTypes = [];
-  let files = skipDuplicates ? 0 : review.dupFiles, bytes = skipDuplicates ? 0 : review.dupBytes;
   for (const box of document.querySelectorAll('#review input[data-type]')) {
     const t = review.types.find((t) => t.type === box.dataset.type);
     if (box.checked) { files += t.files; bytes += t.bytes; } else skipTypes.push(t.type);
   }
-  return { skipDuplicates, skipTypes, files, bytes };
+  return {
+    skipDuplicates, skipTypes, files, bytes,
+    skipGroups: [...skipGroups], keep: Object.fromEntries(keepIn),
+    similar: [...moveAlike], keepSimilar: Object.fromEntries(keepAlike),
+  };
 }
 
 function updateMove() {
+  if (!$('move')) return;
   const s = selection();
   $('move').disabled = s.files === 0;
   $('move').textContent = s.files === 0 ? 'Nothing chosen to move' : `Move ${count(s.files, 'file')} (${human(s.bytes)}) to _Quarantine`;
@@ -476,18 +954,27 @@ function updateMove() {
 
 function move() {
   const s = selection();
-  start('move', { skipDuplicates: s.skipDuplicates, skipTypes: s.skipTypes });
+  start('move', { skipDuplicates: s.skipDuplicates, skipTypes: s.skipTypes, skipGroups: s.skipGroups,
+    keep: s.keep, similar: s.similar, keepSimilar: s.keepSimilar, removeEmpty: $('optRemoveEmpty').checked });
 }
 
 function showMoved(r) {
   const parts = [el('h2', {}, '3. Done')];
-  if (r.stopped) parts.push(el('p', { class: 'big' }, `Stopped after moving ${count(r.moved, 'file')} (${human(r.bytes)}).`));
+  if (r.gaveUp && r.moved === 0) parts.push(el('p', { class: 'note warn' }, 'Nothing could be moved: an error stopped the move, perhaps because the folder cannot be changed. Details, below, says what.'));
+  else if (r.gaveUp) parts.push(el('p', { class: 'note warn' }, `An error stopped the move after ${count(r.moved, 'file')} (${human(r.bytes)}). Details, below, says what.`));
+  else if (r.stopped) parts.push(el('p', { class: 'big' }, `Stopped after moving ${count(r.moved, 'file')} (${human(r.bytes)}).`));
   else parts.push(el('p', { class: 'big good' }, `✓ Moved ${count(r.moved, 'file')} (${human(r.bytes)}) to _Quarantine.`));
   if (r.failed > 0) parts.push(el('p', { class: 'note warn' }, `${count(r.failed, 'file')} could not be moved. Details, below, says why.`));
-  parts.push(el('p', {}, `Look through ${r.quarantine}. When you are happy, delete that folder to free up the space. If something should not have moved, Undo puts everything back.`));
-  parts.push(actions(button('Open _Quarantine', () => reveal('quarantine'), true), button('Undo', () => start('undo', { path: r.folder })), button('Clean up another folder', reset)));
+  if (r.folders > 0) parts.push(el('p', {}, `Removed ${count(r.folders, 'folder')} that the move left empty. Undo makes them again.`));
+  if (r.moved > 0) parts.push(el('p', {}, `Look through ${r.quarantine}. When you are happy, Empty _Quarantine deletes what is in it, to free up the space. If something should not have moved, Undo puts everything back.`));
+  const buttons = actions(
+    r.moved > 0 ? button('Open _Quarantine', () => reveal('quarantine'), 'primary') : null,
+    r.moved > 0 ? button('Undo', () => start('undo', { path: r.folder })) : null,
+    r.moved > 0 ? button('Empty _Quarantine…', () => askEmpty(r.folder, buttons)) : null,
+    button('Clean up another folder', reset, r.moved > 0 ? '' : 'primary'));
+  parts.push(buttons);
   showCard(parts);
-  if (r.failed > 0) $('details').open = true;
+  if (r.failed > 0 || r.gaveUp) $('details').open = true;
   check();
 }
 
@@ -499,7 +986,21 @@ function showUndone(r) {
     parts.push(el('p', { class: 'note warn' }, `${count(r.blocked, 'file')} could not go back, because something new is in their place. They stay in _Quarantine, and Undo can put them back once their places are free. Details, below, lists them.`));
     $('details').open = true;
   }
-  parts.push(actions(button('Open the folder', () => reveal('folder'), true), button('Done', reset)));
+  parts.push(actions(button('Open the folder', () => reveal('folder'), 'primary'), button('Done', reset)));
+  showCard(parts);
+  check();
+}
+
+function showEmptied(r) {
+  const parts = [el('h2', {}, 'Emptied _Quarantine'), el('p', { class: 'big good' }, `✓ Deleted ${count(r.deleted, 'file')} (${human(r.bytes)}) for good.`)];
+  if (r.stopped) parts.push(el('p', { class: 'note warn' }, 'Stopped before everything was deleted. Undo can still put back what is left, and Empty _Quarantine delete it.'));
+  if (r.missing > 0) parts.push(el('p', { class: 'note' }, `${count(r.missing, 'file')} ${r.missing === 1 ? 'was' : 'were'} gone already.`));
+  if (r.failed > 0) {
+    parts.push(el('p', { class: 'note warn' }, `${count(r.failed, 'file')} could not be deleted, and Undo can still put ${r.failed === 1 ? 'it' : 'them'} back. Details, below, says why.`));
+    $('details').open = true;
+  }
+  if (r.kept > 0) parts.push(el('p', { class: 'note warn' }, `${count(r.kept, 'line')} of the journal ${r.kept === 1 ? 'points' : 'point'} outside _Quarantine, so ${r.kept === 1 ? 'its file was' : 'those files were'} left alone.`));
+  parts.push(actions(button('Open the folder', () => reveal('folder'), 'primary'), button('Done', reset)));
   showCard(parts);
   check();
 }
@@ -514,6 +1015,7 @@ function showClosed() {
 window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye?token=' + encodeURIComponent(token)));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 
+loadOptions();
 if (!token) {
   $('closed').querySelector('h2').textContent = 'Open photo_cleanup from its own window';
   $('closed').querySelector('p').textContent = 'This page only works through the link photo_cleanup opens, or prints, when it starts.';

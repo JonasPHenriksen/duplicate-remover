@@ -106,17 +106,31 @@ var pictureTypes = map[string]string{
 // maxPictureSize is the largest photo the page gets to show.
 const maxPictureSize = 64 << 20
 
-// picture sends the page a photo from the last scan, so that the simple page can
-// show what each group of duplicates looks like. The page asks for a group by
-// its number and gets the copy that stays: it can never name a path. Only
+// picture sends the page a photo from the last scan, so that it can show what a
+// group of duplicates or look-alikes looks like. The page asks for group g of
+// the duplicates, or of the look-alikes with set=similar, and for its member m:
+// 0, the default, is the copy that stays. It can never name a path. Only
 // photos a browser can show are sent, and only while the scan is the last job.
 func (s *session) picture(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	g, err := strconv.Atoi(q.Get("g"))
+	g, errG := strconv.Atoi(q.Get("g"))
+	m, errM := 0, error(nil)
+	if q.Has("m") {
+		m, errM = strconv.Atoi(q.Get("m"))
+	}
 	var f *file
 	s.mu.Lock()
-	if err == nil && s.plan != nil && q.Get("job") == strconv.Itoa(s.job) && 0 <= g && g < len(s.plan.groups) {
-		f = s.plan.groups[g].keeper
+	if p := s.plan; errG == nil && errM == nil && p != nil && q.Get("job") == strconv.Itoa(s.job) {
+		groups := p.groups
+		if q.Get("set") == "similar" {
+			groups = p.similar
+		}
+		if 0 <= g && g < len(groups) && 0 <= m && m <= len(groups[g].losers) {
+			f = groups[g].keeper
+			if m > 0 {
+				f = groups[g].losers[m-1]
+			}
+		}
 	}
 	s.mu.Unlock()
 	if f == nil || pictureTypes[extension(f.rel)] == "" || f.size > maxPictureSize {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,7 +148,7 @@ func TestGUIScanMoveAndUndo(t *testing.T) {
 		t.Fatalf("preview %+v", p)
 	}
 	want := []groupView{{Keep: filepath.FromSlash("Trip/IMG_1.jpg"), Reason: "other copy is named like a copy", Why: "copy-name",
-		Size: 9, Copies: []string{filepath.FromSlash("Trip/IMG_1 (1).jpg")}}}
+		Size: 9, Copies: []string{filepath.FromSlash("Trip/IMG_1 (1).jpg")}, Sizes: []int64{9, 9}}}
 	if !reflect.DeepEqual(p.Groups, want) {
 		t.Errorf("groups %+v", p.Groups)
 	}
@@ -183,7 +184,7 @@ func TestGUIRunsOneJobAtATime(t *testing.T) {
 	s, srv := guiServer(t)
 	release := make(chan struct{})
 	defer close(release)
-	s.start(httptest.NewRecorder(), "scan", t.TempDir(), func(r *reporter) any { <-release; return nil })
+	s.start(httptest.NewRecorder(), "scan", t.TempDir(), nil, func(r *reporter) any { <-release; return nil })
 	root := library(t)
 	for _, path := range []string{"/api/scan", "/api/undo"} {
 		if code := call(t, s, srv, "POST", path, map[string]string{"path": root}, nil); code != http.StatusConflict {
@@ -194,7 +195,7 @@ func TestGUIRunsOneJobAtATime(t *testing.T) {
 
 func TestGUIStopsTheJobBetweenFiles(t *testing.T) {
 	s, srv := guiServer(t)
-	s.start(httptest.NewRecorder(), "move", t.TempDir(), func(r *reporter) any {
+	s.start(httptest.NewRecorder(), "move", t.TempDir(), nil, func(r *reporter) any {
 		for !r.stopped() {
 			time.Sleep(time.Millisecond)
 		}
@@ -347,4 +348,112 @@ func startAndQuit(t *testing.T) string {
 		t.Fatal("did not close after Quit")
 	}
 	return out.String()
+}
+
+func TestGUIScanTakesOptions(t *testing.T) {
+	s, srv := guiServer(t)
+	root, _ := folder(library(t))
+	bad := map[string]any{"path": root, "options": map[string]any{"prefer": []string{"/nowhere/at/all"}}}
+	if code := call(t, s, srv, "POST", "/api/scan", bad, nil); code != http.StatusBadRequest {
+		t.Errorf("a folder to keep that is not there: %d, want 400", code)
+	}
+	call(t, s, srv, "POST", "/api/scan", map[string]any{"path": root, "options": map[string]any{"duplicatesOnly": true}}, nil)
+	if p := result[previewView](t, s, srv); !p.Options.DuplicatesOnly || p.OtherFiles != 0 || p.DupFiles != 1 {
+		t.Errorf("preview %+v", p)
+	}
+}
+
+func TestGUIMoveTakesChoices(t *testing.T) {
+	s, srv := guiServer(t)
+	root, _ := folder(library(t))
+	call(t, s, srv, "POST", "/api/scan", map[string]string{"path": root}, nil)
+	result[previewView](t, s, srv)
+	if code := call(t, s, srv, "POST", "/api/move", map[string]any{"skipGroups": []int{5}}, nil); code != http.StatusBadRequest {
+		t.Errorf("a group that is not there: %d, want 400", code)
+	}
+	// Keep the copy named like a copy instead, and leave the other files alone.
+	call(t, s, srv, "POST", "/api/move", map[string]any{"keep": map[string]int{"0": 1}, "skipTypes": []string{"txt", "(empty)"}}, nil)
+	if m := result[outcome](t, s, srv); m.Kind != "moved" || m.Moved != 1 {
+		t.Errorf("move %+v", m)
+	}
+	if !exist(root, "Trip/IMG_1 (1).jpg") || exist(root, "Trip/IMG_1.jpg") || !exist(root, "Notes/notes.txt") {
+		t.Errorf("left %v", files(t, root))
+	}
+}
+
+func TestGUIEmptiesTheQuarantine(t *testing.T) {
+	s, srv := guiServer(t)
+	root, _ := folder(library(t))
+	runOK(t, root, "--apply")
+	call(t, s, srv, "POST", "/api/empty", map[string]string{"path": root}, nil)
+	if e := result[outcome](t, s, srv); e.Kind != "emptied" || e.Deleted != 3 || e.Bytes != 21 {
+		t.Errorf("empty %+v", e)
+	}
+	call(t, s, srv, "POST", "/api/empty", map[string]string{"path": root}, nil)
+	if e := result[outcome](t, s, srv); e.Kind != "error" || !strings.Contains(e.Error, "nothing") {
+		t.Errorf("emptying again %+v", e)
+	}
+}
+
+func TestGUIShowsEachLookAlike(t *testing.T) {
+	s, srv := guiServer(t)
+	root := t.TempDir()
+	small := jpegOf(scene(300, 200, 5), 70)
+	write(t, root, "big.jpg", string(jpegOf(scene(600, 400, 5), 92)))
+	write(t, root, "small.jpg", string(small))
+	var scan struct{ Job int }
+	call(t, s, srv, "POST", "/api/scan", map[string]any{"path": root, "options": map[string]any{"similar": "close"}}, &scan)
+	p := result[previewView](t, s, srv)
+	if len(p.Similar) != 1 || p.Similar[0].Kind != "alike" || p.Similar[0].Dims[1] != "300×200" {
+		t.Fatalf("look-alikes %+v", p.Similar)
+	}
+	get := func(m string) (int, string) {
+		res, err := srv.Client().Get(fmt.Sprintf("%s/api/picture?token=%s&job=%d&set=similar&g=0&m=%s", srv.URL, s.token, scan.Job, m))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(body)
+	}
+	if code, body := get("1"); code != 200 || body != string(small) {
+		t.Errorf("the second look-alike: %d, %d bytes", code, len(body))
+	}
+	if code, _ := get("2"); code != http.StatusNotFound {
+		t.Errorf("a member that is not there: %d", code)
+	}
+}
+
+func TestGUIMoveTakesTheTickForEmptyFolders(t *testing.T) {
+	s, srv := guiServer(t)
+	root, _ := folder(library(t))
+	call(t, s, srv, "POST", "/api/scan", map[string]string{"path": root}, nil)
+	result[previewView](t, s, srv)
+	call(t, s, srv, "POST", "/api/move", map[string]any{"removeEmpty": true}, nil)
+	if m := result[outcome](t, s, srv); m.Folders != 1 || exist(root, "Notes") {
+		t.Errorf("move %+v, Notes still there: %v", m, exist(root, "Notes"))
+	}
+}
+
+func TestGUIMoveNeedsTheLastScansPlan(t *testing.T) {
+	s, _ := guiServer(t)
+	s.plan = &plan{}
+	w := httptest.NewRecorder()
+	s.start(w, "move", t.TempDir(), &plan{}, func(r *reporter) any { return nil })
+	if w.Code != http.StatusConflict {
+		t.Errorf("a plan that is not the last scan's: %d, want 409", w.Code)
+	}
+}
+
+func TestGUIEmptiesOnlyWhatItAskedAbout(t *testing.T) {
+	s, srv := guiServer(t)
+	root, _ := folder(library(t))
+	runOK(t, root, "--apply")
+	call(t, s, srv, "POST", "/api/empty", map[string]any{"path": root, "expect": 2}, nil)
+	if e := result[outcome](t, s, srv); e.Kind != "error" || !strings.Contains(e.Error, "changed") {
+		t.Errorf("asked about 2 files with 3 in _Quarantine: %+v", e)
+	}
+	if got := len(journalLines(t, root)); got != 3 {
+		t.Errorf("journal has %d lines, want 3", got)
+	}
 }

@@ -36,17 +36,52 @@ func groupOf(f *file) string {
 	return typeOf(f)
 }
 
+// shown is how the reports and the page show a file: by its path inside the
+// folder, or in full when it is in the reference folder.
+func shown(f *file) string {
+	if f.ref {
+		return f.path
+	}
+	return filepath.FromSlash(f.rel)
+}
+
 // writeReports writes duplicates.csv, not-media.csv and summary.txt into the
-// quarantine folder and returns the summary.
+// quarantine folder, and similar.csv when it looked for look-alikes, and
+// returns the summary.
 func (p *plan) writeReports(prog string) (string, error) {
 	var dups strings.Builder
 	dups.WriteString("group,role,path,size,reason\n")
 	for i, g := range p.groups {
-		dups.WriteString(csvRow(i+1, "KEPT", filepath.FromSlash(g.keeper.rel), g.keeper.size,
-			whyKept(g.keeper, g.losers[0])))
+		dups.WriteString(csvRow(i+1, "KEPT", shown(g.keeper), g.keeper.size, reasons[p.ru.why(g)]))
+		same := "byte-for-byte identical"
+		if g.kind == "tags" {
+			same = "same picture, different tags"
+		}
 		for _, f := range g.losers {
-			dups.WriteString(csvRow(i+1, "quarantined", filepath.FromSlash(f.rel), f.size,
-				"byte-for-byte identical"))
+			dups.WriteString(csvRow(i+1, "quarantined", shown(f), f.size, same))
+		}
+	}
+
+	// Look-alikes move only when chosen: the ones that did are those planned
+	// to go to _Quarantine/similar in a plan that was applied.
+	alikeMoved := map[string]bool{}
+	if p.applied {
+		for _, m := range p.moves {
+			if strings.HasPrefix(m.to, quarantine+"/"+similarDir+"/") {
+				alikeMoved[m.from] = true
+			}
+		}
+	}
+	var alike strings.Builder
+	alike.WriteString("group,role,path,size,width,height\n")
+	for i, g := range p.similar {
+		alike.WriteString(csvRow(i+1, "suggested keep", shown(g.keeper), g.keeper.size, g.keeper.w, g.keeper.h))
+		for _, f := range g.losers {
+			role := "look-alike"
+			if alikeMoved[f.rel] {
+				role = "quarantined"
+			}
+			alike.WriteString(csvRow(i+1, role, shown(f), f.size, f.w, f.h))
 		}
 	}
 
@@ -80,29 +115,67 @@ func (p *plan) writeReports(prog string) (string, error) {
 	if p.applied {
 		mode = "APPLIED"
 	}
+	var alikeFiles int
+	var alikeBytes int64
+	for _, m := range p.moves {
+		if alikeMoved[m.from] {
+			alikeFiles++
+			alikeBytes += m.size
+		}
+	}
+	nonMedia := fmt.Sprintf("non-media files   : %d  (%s)", len(p.scan.other), human(otherBytes))
+	if p.ru.DuplicatesOnly {
+		nonMedia = "non-media files   : left alone, duplicates only"
+	}
 	lines := []string{
 		"photo_cleanup summary",
 		strings.Repeat("=", 60),
 		"folder            : " + p.root,
 		"mode              : " + mode,
+	}
+	if options := p.ru.summary(); options != "" {
+		lines = append(lines, "options           : "+options)
+	}
+	lines = append(lines,
 		"",
 		fmt.Sprintf("duplicate groups  : %d", len(p.groups)),
 		fmt.Sprintf("duplicate files   : %d  (%s)", dupFiles, human(dupBytes)),
-		fmt.Sprintf("non-media files   : %d  (%s)", len(p.scan.other), human(otherBytes)),
-		fmt.Sprintf("total to move     : %d  (%s)", len(p.moves), human(dupBytes+otherBytes)),
+		nonMedia,
+	)
+	if p.ru.Similar != "" && alikeFiles > 0 {
+		lines = append(lines, fmt.Sprintf("look-alikes moved : %d  (%s), see similar.csv", alikeFiles, human(alikeBytes)))
+	} else if p.ru.Similar != "" {
+		lines = append(lines, fmt.Sprintf("look-alike groups : %d, see similar.csv; none move unless chosen", len(p.similar)))
+	}
+	var moveBytes int64
+	for _, m := range p.moves {
+		moveBytes += m.size
+	}
+	lines = append(lines,
+		fmt.Sprintf("total to move     : %d  (%s)", len(p.moves), human(moveBytes)),
 		fmt.Sprintf("skipped (links)   : %d", p.scan.skipped),
 		fmt.Sprintf("skipped (system)  : %d", p.scan.system),
+	)
+	if p.scan.leftOut > 0 {
+		lines = append(lines, fmt.Sprintf("folders left out  : %d", p.scan.leftOut))
 	}
 	if p.failed > 0 {
 		lines = append(lines, fmt.Sprintf("failed to move    : %d", p.failed))
+	}
+	if p.removed > 0 {
+		lines = append(lines, fmt.Sprintf("emptied, removed  : %d folders", p.removed))
 	}
 	lines = append(lines, "", "non-media by type:")
 	for _, ext := range exts {
 		lines = append(lines, fmt.Sprintf("   %-14s %d", ext, counts[ext]))
 	}
+	detail := "Detail: duplicates.csv, not-media.csv"
+	if p.ru.Similar != "" {
+		detail += ", similar.csv"
+	}
 	lines = append(lines,
 		"",
-		"Detail: duplicates.csv, not-media.csv",
+		detail,
 		"",
 		"Everything moved keeps its original relative path under _Quarantine/,",
 		"so you can drag a whole subfolder back, or restore everything with:",
@@ -114,11 +187,15 @@ func (p *plan) writeReports(prog string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	for name, content := range map[string]string{
+	reports := map[string]string{
 		"duplicates.csv": dups.String(),
 		"not-media.csv":  other.String(),
 		"summary.txt":    summary + "\n",
-	} {
+	}
+	if p.ru.Similar != "" {
+		reports["similar.csv"] = alike.String()
+	}
+	for name, content := range reports {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			return "", err
 		}

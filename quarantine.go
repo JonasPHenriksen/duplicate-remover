@@ -9,6 +9,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -29,20 +32,27 @@ type journalEntry struct {
 // plan is what one run found, and what it moves.
 type plan struct {
 	root          string
+	ru            *rules
 	scan          scanResult
-	groups        []group
+	groups        []group // duplicates, whose losers move
+	similar       []group // photos that look alike: their losers only move when chosen
 	moves         []move
 	moved, failed int
 	movedBytes    int64
+	removed       int // folders removed after the move, as it left them empty
 	applied       bool
 	stopped       bool
 }
 
 // prepare scans the folder and works out what to move. It returns false when
 // the run was stopped before it got that far.
-func prepare(root string, r *reporter) (*plan, bool) {
+func prepare(root string, r *reporter) (*plan, bool) { return prepareWith(root, defaultRules, r) }
+
+// prepareWith is prepare by the rules: what to look in, what to look for, and
+// which copy to keep.
+func prepareWith(root string, ru *rules, r *reporter) (*plan, bool) {
 	r.printf("Scanning %s\n", root)
-	res := scan(root, r)
+	res := scanFolder(root, ru.skip, ru.keep, false, r)
 	if r.stopped() {
 		return nil, false
 	}
@@ -53,24 +63,81 @@ func prepare(root string, r *reporter) (*plan, bool) {
 	if res.system > 0 {
 		r.printf("  %d system files and folders left alone\n", res.system)
 	}
+	if res.leftOut == 1 {
+		r.printf("  1 folder left out\n")
+	} else if res.leftOut > 1 {
+		r.printf("  %d folders left out\n", res.leftOut)
+	}
+	if ru.DuplicatesOnly {
+		res.other = nil
+	}
+	media := res.media
+	if ru.reference != "" {
+		r.printf("Scanning the reference folder %s\n", ru.reference)
+		refs := scanFolder(ru.reference, nil, nil, true, r)
+		if r.stopped() {
+			return nil, false
+		}
+		r.printf("  %d photos/videos\n", len(refs.media))
+		media = append(slices.Clip(media), refs.media...)
+	}
+	var c *cache
+	if ru.Cache {
+		if c = loadCache(root); len(c.old) > 0 {
+			r.printf("  remembers fingerprints of %d files from earlier runs\n", len(c.old))
+		}
+	}
 
 	r.printf("Looking for duplicates\n")
-	groups := findDuplicates(res.media, r)
+	groups := ru.findDuplicates(media, c, r)
 	if r.stopped() {
 		return nil, false
 	}
-	return &plan{root: root, scan: res, groups: groups, moves: planMoves(groups, res.other)}, true
+	if ru.SameImage {
+		r.printf("Comparing JPEGs without their tags\n")
+		if groups = ru.sameImages(groups, media, c, r); r.stopped() {
+			return nil, false
+		}
+	}
+	var similar []group
+	if ru.Similar != "" {
+		r.printf("Looking for photos that look alike\n")
+		if similar = ru.lookAlikes(groups, media, c, r); r.stopped() {
+			return nil, false
+		}
+		r.printf("  %d groups of photos look alike\n", len(similar))
+	}
+	if err := c.save(root, media); err != nil {
+		r.warnf("  ! could not remember the fingerprints: %v\n", err)
+	}
+	return &plan{root: root, ru: ru, scan: res, groups: groups, similar: similar,
+		moves: planMoves(groups, nil, res.other)}, true
 }
 
-func planMoves(groups []group, other []*file) []move {
+// planMoves plans to move the losers of the groups and of the look-alikes, and
+// the other files, each file once: a photo that is a duplicate's loser and a
+// look-alike's too moves with the duplicates.
+func planMoves(groups, similar []group, other []*file) []move {
 	var moves []move
+	planned := map[string]bool{}
+	add := func(f *file, dir string) {
+		if !planned[f.rel] {
+			planned[f.rel] = true
+			moves = append(moves, move{f.rel, quarantine + "/" + dir + "/" + f.rel, f.size})
+		}
+	}
 	for _, g := range groups {
 		for _, f := range g.losers {
-			moves = append(moves, move{f.rel, quarantine + "/" + dupDir + "/" + f.rel, f.size})
+			add(f, dupDir)
+		}
+	}
+	for _, g := range similar {
+		for _, f := range g.losers {
+			add(f, similarDir)
 		}
 	}
 	for _, f := range other {
-		moves = append(moves, move{f.rel, quarantine + "/" + otherDir + "/" + f.rel, f.size})
+		add(f, otherDir)
 	}
 	return moves
 }
@@ -78,17 +145,211 @@ func planMoves(groups []group, other []*file) []move {
 // leaveOut takes files out of the plan before it is applied: every duplicate,
 // and the non-media files whose group (see groupOf) is in groups.
 func (p *plan) leaveOut(duplicates bool, groups map[string]bool) {
-	if duplicates {
-		p.groups = nil
+	var types []string
+	for t := range groups {
+		types = append(types, t)
 	}
+	p.choose(choices{SkipDuplicates: duplicates, SkipTypes: types})
+}
+
+// choices are what the page changes in a plan before it is carried out. Groups
+// are numbered as the preview lists them, and their members too: 0 is the one
+// that stays, and the copies follow from 1.
+type choices struct {
+	SkipDuplicates bool           `json:"skipDuplicates"` // every duplicate stays where it is
+	SkipTypes      []string       `json:"skipTypes"`      // the non-media files of these groups (see groupOf) stay
+	SkipGroups     []int          `json:"skipGroups"`     // these duplicate groups stay
+	Keep           map[string]int `json:"keep"`           // duplicate group → the member to keep instead
+	Similar        []int          `json:"similar"`        // these look-alike groups move all but one
+	KeepSimilar    map[string]int `json:"keepSimilar"`    // look-alike group → the member to keep instead
+	RemoveEmpty    *bool          `json:"removeEmpty"`    // instead of the option the scan had, if given
+}
+
+// check reports choices that don't fit the plan.
+func (p *plan) check(c choices) error {
+	bad := func(what string, i int) error { return fmt.Errorf("there is no %s %d", what, i) }
+	for _, i := range c.SkipGroups {
+		if i < 0 || i >= len(p.groups) {
+			return bad("group", i)
+		}
+	}
+	for _, i := range c.Similar {
+		if i < 0 || i >= len(p.similar) {
+			return bad("look-alike group", i)
+		}
+	}
+	for what, keep := range map[string]map[string]int{"group": c.Keep, "look-alike group": c.KeepSimilar} {
+		groups := p.groups
+		if what != "group" {
+			groups = p.similar
+		}
+		for key, m := range keep {
+			i, err := strconv.Atoi(key)
+			if err != nil || i < 0 || i >= len(groups) {
+				return fmt.Errorf("there is no %s %q", what, key)
+			}
+			if m < 0 || m > len(groups[i].losers) {
+				return fmt.Errorf("%s %d has no member %d", what, i, m)
+			}
+		}
+	}
+	return nil
+}
+
+// choose changes the plan as c says, which check must have passed.
+func (p *plan) choose(c choices) {
+	var groups []group
+	for i, g := range p.groups {
+		if c.SkipDuplicates || slices.Contains(c.SkipGroups, i) {
+			continue
+		}
+		if g = g.keepInstead(c.Keep[strconv.Itoa(i)]); len(g.losers) > 0 {
+			groups = append(groups, g)
+		}
+	}
+	var similar []group
+	for i, g := range p.similar {
+		if !slices.Contains(c.Similar, i) {
+			continue
+		}
+		if g = g.keepInstead(c.KeepSimilar[strconv.Itoa(i)]); len(g.losers) > 0 {
+			similar = append(similar, g)
+		}
+	}
+	types := setOf(c.SkipTypes...)
 	var other []*file
 	for _, f := range p.scan.other {
-		if !groups[groupOf(f)] {
+		if !types[groupOf(f)] {
 			other = append(other, f)
 		}
 	}
-	p.scan.other = other
-	p.moves = planMoves(p.groups, other)
+	p.groups, p.similar, p.scan.other = groups, similar, other
+	p.moves = planMoves(groups, similar, other)
+}
+
+// keepInstead keeps member m of the group, 1 or more being its losers, instead
+// of its keeper, which then goes, unless it may not move.
+func (g group) keepInstead(m int) group {
+	if m < 1 || m > len(g.losers) {
+		return g
+	}
+	out := group{keeper: g.losers[m-1], kind: g.kind, chosen: true}
+	if movable(g.keeper) {
+		out.losers = append(out.losers, g.keeper)
+	}
+	for i, f := range g.losers {
+		if i != m-1 {
+			out.losers = append(out.losers, f)
+		}
+	}
+	return out
+}
+
+// removeLeftEmpty removes the folders the move emptied, the deepest first, up
+// to but never the scanned folder itself. Folders that still hold anything
+// stay, hidden files such as .DS_Store included. Undo makes the folders again
+// as it puts files back into them.
+func (p *plan) removeLeftEmpty() int {
+	pending := map[string]bool{}
+	for _, m := range p.moves {
+		if dir := path.Dir(m.from); dir != "." {
+			pending[dir] = true
+		}
+	}
+	removed := 0
+	for len(pending) > 0 {
+		dirs := make([]string, 0, len(pending))
+		for dir := range pending {
+			dirs = append(dirs, dir)
+		}
+		sort.Slice(dirs, func(i, j int) bool { return strings.Count(dirs[i], "/") > strings.Count(dirs[j], "/") })
+		pending = map[string]bool{}
+		for _, dir := range dirs {
+			fp := full(p.root, dir)
+			if info, err := os.Lstat(fp); err != nil || !info.IsDir() || os.Remove(fp) != nil {
+				continue
+			}
+			removed++
+			if parent := path.Dir(dir); parent != "." {
+				pending[parent] = true
+			}
+		}
+	}
+	return removed
+}
+
+type emptyResult struct {
+	deleted, missing, failed, kept int
+	bytes                          int64
+	stopped                        bool
+}
+
+// errChanged is what emptyQuarantine says when the journal no longer has the
+// number of lines the person was asked about.
+var errChanged = errors.New("_Quarantine changed since you were asked, so nothing was deleted: ask again")
+
+// emptyQuarantine deletes, for good, the files the journal says clean-ups moved
+// into _Quarantine, and their lines in the journal. It is the one thing
+// photo_cleanup deletes, and it deletes nothing else: only plain files in the
+// folders inside _Quarantine, so never the reports, the journal or anything
+// the journal points to outside it. expect, when not 0, is the number of lines
+// the journal had when the person was asked; if it has another, nothing is
+// deleted. The error wraps fs.ErrNotExist when there is no journal.
+func emptyQuarantine(root string, expect int, r *reporter) (emptyResult, error) {
+	var res emptyResult
+	dir := filepath.Join(root, quarantine)
+	journal := filepath.Join(dir, journalName)
+	entries, err := readJournal(journal)
+	if err != nil {
+		return res, err
+	}
+	if expect != 0 && len(entries) != expect {
+		return res, errChanged
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return res, err
+	}
+	gone := make([]bool, len(entries))
+	for i, e := range entries {
+		if r.stopped() {
+			res.stopped = true
+			break
+		}
+		r.progress("empty", int64(i), int64(len(entries)), e.To)
+		p := filepath.Clean(resolve(root, e.To))
+		parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+		if !within(p, dir) || filepath.Dir(p) == dir || p == dir || err == nil && !within(parent, real) {
+			res.kept++
+			continue
+		}
+		info, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			res.missing++
+			gone[i] = true
+		case err != nil || !info.Mode().IsRegular():
+			r.warnf("  ! not deleting %s, which is not a plain file\n", p)
+			res.failed++
+		default:
+			if err := os.Remove(p); err != nil {
+				r.warnf("  ! could not delete %s: %v\n", p, err)
+				res.failed++
+				continue
+			}
+			res.deleted++
+			res.bytes += info.Size()
+			gone[i] = true
+		}
+	}
+	if !res.stopped {
+		r.progress("empty", int64(len(entries)), int64(len(entries)), "")
+	}
+	removeEmptyDirs(dir)
+	if err := keepUnrestored(journal, entries, gone); err != nil {
+		r.warnf("  ! could not update %s: %v\n", journal, err)
+	}
+	return res, nil
 }
 
 // apply moves the files into the quarantine, recording each move in the journal

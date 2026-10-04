@@ -46,9 +46,9 @@ func TestEachEditionServesItsOwnPage(t *testing.T) {
 			}
 			page, _ := io.ReadAll(res.Body)
 			res.Body.Close()
-			// Only the simple page shows pictures.
+			// Both show pictures, from this program only.
 			csp := res.Header.Get("Content-Security-Policy")
-			if !bytes.Equal(page, want) || strings.Contains(csp, "img-src 'self'") != simple {
+			if !bytes.Equal(page, want) || !strings.Contains(csp, "img-src 'self'") {
 				t.Errorf("%d bytes of page, CSP %q", len(page), csp)
 			}
 		})

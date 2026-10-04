@@ -136,6 +136,7 @@ func (s *session) handler(host string) http.Handler {
 	mux.HandleFunc("POST /api/scan", s.startScan)
 	mux.HandleFunc("POST /api/move", s.startMove)
 	mux.HandleFunc("POST /api/undo", s.startUndo)
+	mux.HandleFunc("POST /api/empty", s.startEmpty)
 	mux.HandleFunc("POST /api/stop", s.stop)
 	mux.HandleFunc("POST /api/reveal", s.reveal)
 	mux.HandleFunc("GET /api/picture", s.picture)
@@ -164,15 +165,15 @@ func (s *session) handler(host string) http.Handler {
 }
 
 func (s *session) page(w http.ResponseWriter, req *http.Request) {
-	page, pictures := guiPage, ""
+	page := guiPage
 	if simpleEdition() {
-		page, pictures = simplePage, "img-src 'self'; "
+		page = simplePage
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
-		pictures+"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		"img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.Write(page)
@@ -240,19 +241,37 @@ func chosenFolder(path string) (string, bool) {
 	return folder(path)
 }
 
-// pick shows the folder picker, titled in the page's language. In the simple
-// edition it opens at the folder the page suggests, where it can.
+// pick shows the folder picker, titled in the page's language and for its
+// purpose: the folder to clean up, or a folder for the options. It opens in
+// start, if that is a folder, and in the simple edition at the folder the
+// page suggests, where it can.
 func (s *session) pick(w http.ResponseWriter, req *http.Request) {
-	var in struct{ Lang string }
+	var in struct{ Lang, Purpose, Start string }
 	if !readJSON(w, req, &in) {
 		return
 	}
-	path, err := pickFolder(pickerTitle(in.Lang), s.pictures)
+	start := s.pictures
+	if dir, ok := chosenFolder(in.Start); ok {
+		start = dir
+	}
+	title := pickerTitle(in.Lang)
+	switch in.Purpose {
+	case "keep":
+		title = "Choose a folder whose copies always stay"
+	case "skip":
+		title = "Choose a folder to leave out"
+	case "reference":
+		title = "Choose the reference folder"
+	}
+	path, err := pickFolder(title, start)
 	writeJSON(w, map[string]any{"path": path, "unavailable": err != nil})
 }
 
 func (s *session) startScan(w http.ResponseWriter, req *http.Request) {
-	var in struct{ Path string }
+	var in struct {
+		Path    string
+		Options options
+	}
 	if !readJSON(w, req, &in) {
 		return
 	}
@@ -261,8 +280,13 @@ func (s *session) startScan(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Not a folder: "+root, http.StatusBadRequest)
 		return
 	}
-	s.start(w, "scan", root, func(r *reporter) any {
-		p, ok := prepare(root, r)
+	ru, err := newRules(root, in.Options)
+	if err != nil {
+		http.Error(w, "Cannot look through the folder like that: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.start(w, "scan", root, nil, func(r *reporter) any {
+		p, ok := prepareWith(root, ru, r)
 		if !ok {
 			return outcome{Kind: "stopped", Folder: root}
 		}
@@ -276,12 +300,9 @@ func (s *session) startScan(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// startMove carries out the last scan's plan, minus what the page leaves out.
+// startMove carries out the last scan's plan, as the page changed it.
 func (s *session) startMove(w http.ResponseWriter, req *http.Request) {
-	var in struct {
-		SkipDuplicates bool     `json:"skipDuplicates"`
-		SkipTypes      []string `json:"skipTypes"`
-	}
+	var in choices
 	if !readJSON(w, req, &in) {
 		return
 	}
@@ -292,16 +313,57 @@ func (s *session) startMove(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Scan the folder first.", http.StatusConflict)
 		return
 	}
-	s.start(w, "move", p.root, func(r *reporter) any {
-		p.leaveOut(in.SkipDuplicates, setOf(in.SkipTypes...))
+	if err := p.check(in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	removeEmpty := p.ru.RemoveEmpty
+	if in.RemoveEmpty != nil {
+		removeEmpty = *in.RemoveEmpty
+	}
+	s.start(w, "move", p.root, p, func(r *reporter) any {
+		p.choose(in)
 		code := p.apply(r)
 		if code == 0 {
+			if removeEmpty {
+				p.removed = p.removeLeftEmpty()
+			}
 			if _, err := p.writeReports(s.prog); err != nil {
 				r.warnf("  ! could not write the reports: %v\n", err)
 			}
 		}
 		return outcome{Kind: "moved", Folder: p.root, Quarantine: filepath.Join(p.root, quarantine),
-			Moved: p.moved, Failed: p.failed, Bytes: p.movedBytes, Stopped: p.stopped, GaveUp: code == 1}
+			Moved: p.moved, Failed: p.failed, Bytes: p.movedBytes, Stopped: p.stopped, GaveUp: code == 1,
+			Folders: p.removed}
+	})
+}
+
+// startEmpty deletes, for good, what clean-ups moved into the folder's
+// _Quarantine. The page asks first, and sends the number of files it asked
+// about: if the journal has another, nothing is deleted.
+func (s *session) startEmpty(w http.ResponseWriter, req *http.Request) {
+	var in struct {
+		Path   string
+		Expect int
+	}
+	if !readJSON(w, req, &in) {
+		return
+	}
+	root, ok := chosenFolder(in.Path)
+	if !ok {
+		http.Error(w, "Not a folder: "+root, http.StatusBadRequest)
+		return
+	}
+	s.start(w, "empty", root, nil, func(r *reporter) any {
+		res, err := emptyQuarantine(root, in.Expect, r)
+		if errors.Is(err, fs.ErrNotExist) {
+			return outcome{Kind: "error", Folder: root, Error: "There is nothing in _Quarantine to delete."}
+		}
+		if err != nil {
+			return outcome{Kind: "error", Folder: root, Error: err.Error()}
+		}
+		return outcome{Kind: "emptied", Folder: root, Deleted: res.deleted, Bytes: res.bytes,
+			Missing: res.missing, Failed: res.failed, Kept: res.kept, Stopped: res.stopped}
 	})
 }
 
@@ -315,7 +377,7 @@ func (s *session) startUndo(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Not a folder: "+root, http.StatusBadRequest)
 		return
 	}
-	s.start(w, "undo", root, func(r *reporter) any {
+	s.start(w, "undo", root, nil, func(r *reporter) any {
 		res, err := undo(root, r)
 		if errors.Is(err, fs.ErrNotExist) {
 			return outcome{Kind: "error", Folder: root, Error: "There is nothing to undo in this folder."}
@@ -329,12 +391,19 @@ func (s *session) startUndo(w http.ResponseWriter, req *http.Request) {
 }
 
 // start runs a job in the background, one at a time. Any new job replaces the
-// last scan's plan: a move uses it up, and a scan or undo makes it stale.
-func (s *session) start(w http.ResponseWriter, kind, root string, job func(r *reporter) any) {
+// last scan's plan: a move uses it up, and a scan or undo makes it stale. A
+// move gives the plan it carries out as plan, and only starts if that is still
+// the last scan's, so that two moves never carry out one plan.
+func (s *session) start(w http.ResponseWriter, kind, root string, plan *plan, job func(r *reporter) any) {
 	s.mu.Lock()
 	if s.busy {
 		s.mu.Unlock()
 		http.Error(w, "photo_cleanup is busy.", http.StatusConflict)
+		return
+	}
+	if plan != nil && s.plan != plan {
+		s.mu.Unlock()
+		http.Error(w, "Scan the folder first.", http.StatusConflict)
 		return
 	}
 	s.job++
@@ -361,9 +430,14 @@ func (s *session) start(w http.ResponseWriter, kind, root string, job func(r *re
 	writeJSON(w, map[string]int{"job": n})
 }
 
+// progress keeps the latest news of the running job. Within a phase, done only
+// grows: files read at once can report a little out of order.
 func (s *session) progress(phase string, done, total int64, item string) {
 	s.mu.Lock()
-	s.phase, s.done, s.total, s.item = phase, done, total, filepath.FromSlash(item)
+	if phase != s.phase || done > s.done {
+		s.done = done
+	}
+	s.phase, s.total, s.item = phase, total, filepath.FromSlash(item)
 	s.mu.Unlock()
 }
 
@@ -451,9 +525,10 @@ func (s *session) finished(now time.Time) bool {
 	return gone && !s.busy
 }
 
-// outcome is how a move, an undo, a stopped scan or a failure ended.
+// outcome is how a move, an undo, emptying _Quarantine, a stopped scan or a
+// failure ended.
 type outcome struct {
-	Kind       string `json:"kind"` // "moved", "undone", "stopped" or "error"
+	Kind       string `json:"kind"` // "moved", "undone", "emptied", "stopped" or "error"
 	Folder     string `json:"folder"`
 	Quarantine string `json:"quarantine,omitempty"`
 	Moved      int    `json:"moved"`
@@ -463,26 +538,34 @@ type outcome struct {
 	Missing    int    `json:"missing"`
 	Blocked    int    `json:"blocked"`
 	Stopped    bool   `json:"stopped"`
-	GaveUp     bool   `json:"gaveUp,omitempty"` // a move that met an error it could not go on after, in the log
+	GaveUp     bool   `json:"gaveUp,omitempty"`  // a move that met an error it could not go on after, in the log
+	Folders    int    `json:"folders,omitempty"` // folders removed after a move, being left empty
+	Deleted    int    `json:"deleted,omitempty"` // files deleted from _Quarantine
+	Kept       int    `json:"kept,omitempty"`    // journal lines pointing outside _Quarantine, left alone
 	Error      string `json:"error,omitempty"`
 }
 
 // previewView is a scan as the page shows it.
 type previewView struct {
-	Kind       string      `json:"kind"` // "preview"
-	Folder     string      `json:"folder"`
-	Quarantine string      `json:"quarantine"`
-	Media      int         `json:"media"`
-	Groups     []groupView `json:"groups"`
-	MoreGroups int         `json:"moreGroups"`
-	DupFiles   int         `json:"dupFiles"`
-	DupBytes   int64       `json:"dupBytes"`
-	Types      []typeView  `json:"types"` // non-media files by group, most first
-	OtherFiles int         `json:"otherFiles"`
-	OtherBytes int64       `json:"otherBytes"`
-	Skipped    int         `json:"skipped"`
-	System     int         `json:"system"`
-	Journal    int         `json:"journal"` // moves earlier clean-ups recorded
+	Kind        string      `json:"kind"` // "preview"
+	Folder      string      `json:"folder"`
+	Quarantine  string      `json:"quarantine"`
+	Media       int         `json:"media"`
+	Groups      []groupView `json:"groups"`
+	MoreGroups  int         `json:"moreGroups"`
+	DupFiles    int         `json:"dupFiles"`
+	DupBytes    int64       `json:"dupBytes"`
+	Similar     []groupView `json:"similar"` // photos that look alike
+	MoreSimilar int         `json:"moreSimilar"`
+	Types       []typeView  `json:"types"` // non-media files by group, most first
+	OtherFiles  int         `json:"otherFiles"`
+	OtherBytes  int64       `json:"otherBytes"`
+	Skipped     int         `json:"skipped"`
+	System      int         `json:"system"`
+	LeftOut     int         `json:"leftOut"` // folders left out on purpose
+	Journal     int         `json:"journal"` // moves earlier clean-ups recorded
+	Options     options     `json:"options"`
+	Reference   string      `json:"reference,omitempty"`
 }
 
 type groupView struct {
@@ -491,6 +574,28 @@ type groupView struct {
 	Why    string   `json:"why"` // the reason as a code, for the simple page
 	Size   int64    `json:"size"`
 	Copies []string `json:"copies"`
+	Kind   string   `json:"kind,omitempty"`  // see group
+	Ref    bool     `json:"ref,omitempty"`   // Keep is the copy in the reference folder, in full
+	Stays  bool     `json:"stays,omitempty"` // Keep may not move: it is in the reference folder or a folder to keep
+	Sizes  []int64  `json:"sizes"`           // of Keep, then of each copy
+	Dims   []string `json:"dims,omitempty"`  // likewise, width×height, for look-alikes
+}
+
+// view is a group as the page shows it.
+func (p *plan) view(g group) groupView {
+	why := p.ru.why(g)
+	gv := groupView{Keep: shown(g.keeper), Reason: reasons[why], Why: why, Size: g.keeper.size, Kind: g.kind,
+		Ref: g.keeper.ref, Stays: !movable(g.keeper), Sizes: []int64{g.keeper.size}}
+	for _, f := range g.losers {
+		gv.Copies = append(gv.Copies, shown(f))
+		gv.Sizes = append(gv.Sizes, f.size)
+	}
+	if g.kind == "alike" {
+		for _, f := range append([]*file{g.keeper}, g.losers...) {
+			gv.Dims = append(gv.Dims, fmt.Sprintf("%d×%d", f.w, f.h))
+		}
+	}
+	return gv
 }
 
 type typeView struct {
@@ -502,8 +607,9 @@ type typeView struct {
 
 func preview(p *plan) previewView {
 	v := previewView{Kind: "preview", Folder: p.root, Quarantine: filepath.Join(p.root, quarantine),
-		Media: len(p.scan.media), Skipped: p.scan.skipped, System: p.scan.system,
-		Groups: []groupView{}, Types: []typeView{}}
+		Media: len(p.scan.media), Skipped: p.scan.skipped, System: p.scan.system, LeftOut: p.scan.leftOut,
+		Groups: []groupView{}, Similar: []groupView{}, Types: []typeView{}, Options: p.ru.options,
+		Reference: p.ru.reference}
 	for _, g := range p.groups {
 		for _, f := range g.losers {
 			v.DupFiles++
@@ -513,12 +619,14 @@ func preview(p *plan) previewView {
 			v.MoreGroups++
 			continue
 		}
-		why := keptBecause(g.keeper, g.losers[0])
-		gv := groupView{Keep: filepath.FromSlash(g.keeper.rel), Reason: reasons[why], Why: why, Size: g.keeper.size}
-		for _, f := range g.losers {
-			gv.Copies = append(gv.Copies, filepath.FromSlash(f.rel))
+		v.Groups = append(v.Groups, p.view(g))
+	}
+	for _, g := range p.similar {
+		if len(v.Similar) == maxGroupsShown {
+			v.MoreSimilar++
+			continue
 		}
-		v.Groups = append(v.Groups, gv)
+		v.Similar = append(v.Similar, p.view(g))
 	}
 
 	index := map[string]int{}

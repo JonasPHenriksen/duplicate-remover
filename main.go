@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 )
@@ -54,6 +55,7 @@ const (
 	quarantine  = "_Quarantine"
 	dupDir      = "duplicates" // _Quarantine/duplicates/<original path>
 	otherDir    = "not-media"  // _Quarantine/not-media/<original path>
+	similarDir  = "similar"    // _Quarantine/similar/<original path>, for look-alikes chosen to move
 	journalName = "journal.jsonl"
 )
 
@@ -110,6 +112,20 @@ Usage:
     photo_cleanup /path/to/photos --undo     # put everything back
     photo_cleanup --gui [/path/to/photos]    # the graphical interface, from here
 
+Options, for looking through a folder, with or without --apply:
+    --duplicates-only     leave files that aren't photos or videos alone
+    --same-image          JPEGs that differ only in their tags are duplicates too
+    --similar[=loose]     list photos that look alike in similar.csv, never moved
+    --keep-newest         of equal copies, keep the newest instead of the oldest
+    --prefer FOLDER       copies in FOLDER, inside the one cleaned, always stay
+    --backup NAME         count folders named NAME as backups too
+    --reference FOLDER    photos already in FOLDER count as kept: copies move
+    --skip FOLDER         never look in FOLDER, inside the one cleaned
+    --remove-empty        remove the folders a move leaves empty
+    --one-at-a-time       read one file at a time, faster on spinning disks
+    --cache               remember fingerprints in _Quarantine for next time
+--prefer, --backup and --skip can be given more than once.
+
 The graphical interface opens in your web browser. Without a screen, for
 example over SSH, photo_cleanup asks for the folder in the terminal instead.
 `
@@ -137,62 +153,140 @@ func main() {
 
 // run is the command line version. args includes the program name.
 func run(args []string, stdout, stderr io.Writer) int {
-	var applyIt, undoIt, guiIt bool
-	var folders []string
-	for _, a := range args[1:] {
-		switch {
-		case a == "--apply":
-			applyIt = true
-		case a == "--undo":
-			undoIt = true
-		case a == "--gui":
-			guiIt = true
-		case a == "-h" || a == "--help":
-			fmt.Fprint(stdout, usage)
-			return 0
-		case strings.HasPrefix(a, "--"):
-			fmt.Fprintf(stderr, "Unknown option %s\n\n%s", a, usage)
-			return 2
-		default:
-			folders = append(folders, a)
-		}
+	fl, err := parseFlags(args[1:])
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n\n%s", err, usage)
+		return 2
 	}
-	if guiIt && !applyIt && !undoIt && len(folders) <= 1 {
-		return gui(args[0], strings.Join(folders, ""), stdout)
+	if fl.help {
+		fmt.Fprint(stdout, usage)
+		return 0
 	}
-	if guiIt || len(folders) != 1 || (applyIt && undoIt) {
+	if fl.gui && !fl.apply && !fl.undo && !fl.optioned && len(fl.folders) <= 1 {
+		return gui(args[0], strings.Join(fl.folders, ""), stdout)
+	}
+	if fl.gui || len(fl.folders) != 1 || (fl.apply && fl.undo) || (fl.undo && fl.optioned) {
 		fmt.Fprint(stdout, usage)
 		return 2
 	}
 
-	root, ok := folder(folders[0])
+	root, ok := folder(fl.folders[0])
 	if !ok {
 		fmt.Fprintf(stderr, "Not a folder: %s\n", root)
 		return 2
 	}
+	ru, err := newRules(root, fl.options)
+	if err != nil {
+		fmt.Fprintf(stderr, "Cannot run like that: %v\n", err)
+		return 2
+	}
 	r, done := terminalReporter(stdout, stderr)
 	defer done()
-	if undoIt {
+	if fl.undo {
 		return undoInTerminal(root, r)
 	}
 
-	p, ok := prepare(root, r)
+	p, ok := prepareWith(root, ru, r)
 	if !ok {
 		r.warnf("\ninterrupted, nothing was moved\n")
 		return 130
 	}
-	if applyIt {
+	if fl.apply {
 		if code := p.apply(r); code != 0 {
 			return code
+		}
+		if ru.RemoveEmpty {
+			p.removed = p.removeLeftEmpty()
 		}
 	}
 	if code := p.report(args[0], r); code != 0 {
 		return code
 	}
-	if !applyIt {
+	if !fl.apply {
 		r.printf("\nNothing was moved. Re-run with --apply when the lists look right.\n")
 	}
 	return 0
+}
+
+// flags are what a command line asks for.
+type flags struct {
+	apply, undo, gui, help bool
+	options                options
+	optioned               bool // whether any of the options was given
+	folders                []string
+}
+
+// parseFlags reads a command line without the program's name. The options
+// that take a value take it after = or as the next argument.
+func parseFlags(args []string) (flags, error) {
+	var fl flags
+	o := &fl.options
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			fl.folders = append(fl.folders, a)
+			continue
+		}
+		name, value, hasValue := strings.Cut(a, "=")
+		valued := false
+		switch name {
+		case "--apply":
+			fl.apply = true
+		case "--undo":
+			fl.undo = true
+		case "--gui":
+			fl.gui = true
+		case "-h", "--help":
+			fl.help = true
+		case "--duplicates-only":
+			o.DuplicatesOnly = true
+		case "--same-image":
+			o.SameImage = true
+		case "--similar":
+			o.Similar, valued = "close", true
+			if hasValue {
+				o.Similar = value
+			}
+		case "--keep-newest":
+			o.KeepNewest = true
+		case "--remove-empty":
+			o.RemoveEmpty = true
+		case "--one-at-a-time":
+			o.OneAtATime = true
+		case "--cache":
+			o.Cache = true
+		case "--prefer", "--backup", "--reference", "--skip":
+			valued = true
+			if !hasValue {
+				if i+1 == len(args) {
+					return fl, fmt.Errorf("%s needs a value", name)
+				}
+				i++
+				value = args[i]
+			}
+			switch name {
+			case "--prefer":
+				o.Prefer = append(o.Prefer, value)
+			case "--backup":
+				o.Backups = append(o.Backups, strings.Split(value, ",")...)
+			case "--reference":
+				o.Reference = value
+			case "--skip":
+				o.Skip = append(o.Skip, value)
+			}
+		default:
+			return fl, fmt.Errorf("Unknown option %s", a)
+		}
+		if hasValue && !valued {
+			return fl, fmt.Errorf("%s takes no value", name)
+		}
+		switch name {
+		case "--apply", "--undo", "--gui", "-h", "--help":
+		default:
+			fl.optioned = true
+		}
+	}
+	return fl, nil
 }
 
 // interactive asks for the folder and what to do in the terminal, for when
@@ -347,18 +441,40 @@ func isTerminal(f *os.File) bool {
 // reporter is where a run reports what it does: lines of text for people, and
 // done/total counts for the progress bars of the graphical interface. stop,
 // when set, asks the run to stop at the next safe point, between two files.
+// Runs read several files at once, so a reporter takes calls from several
+// goroutines, and makes them one at a time.
 type reporter struct {
 	out, errOut io.Writer
 	step        func(phase string, done, total int64, item string)
 	stop        func() bool
+	mu          sync.Mutex
 }
 
-func (r *reporter) printf(format string, args ...any) { fmt.Fprintf(r.out, format, args...) }
-func (r *reporter) warnf(format string, args ...any)  { fmt.Fprintf(r.errOut, format, args...) }
-func (r *reporter) stopped() bool                     { return r.stop != nil && r.stop() }
+func (r *reporter) printf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fmt.Fprintf(r.out, format, args...)
+}
+
+func (r *reporter) warnf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fmt.Fprintf(r.errOut, format, args...)
+}
+
+func (r *reporter) stopped() bool {
+	if r.stop == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stop()
+}
 
 func (r *reporter) progress(phase string, done, total int64, item string) {
 	if r.step != nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 		r.step(phase, done, total, item)
 	}
 }
