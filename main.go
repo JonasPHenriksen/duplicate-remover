@@ -6,12 +6,13 @@
 //
 // Usage:
 //
+//	photo_cleanup                            # open the graphical interface
 //	photo_cleanup /path/to/photos            # look only, change nothing
 //	photo_cleanup /path/to/photos --apply    # move files to _Quarantine
 //	photo_cleanup /path/to/photos --undo     # put everything back
 //
-// Started without arguments, for example by double-clicking it, it asks for the
-// folder instead. It is a single self-contained program: nothing to install.
+// The graphical interface is a page in the web browser, served by the program
+// to this computer only. It is a single self-contained program: nothing to install.
 package main
 
 import (
@@ -23,6 +24,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
+	"syscall"
 )
 
 // ---------------------------------------------------------------------------
@@ -101,21 +104,29 @@ Everything removed is moved into <folder>/_Quarantine/ under the exact same
 relative path it came from, so you can review it and put it back.
 
 Usage:
+    photo_cleanup                            # open the graphical interface
     photo_cleanup /path/to/photos            # look only, change nothing
     photo_cleanup /path/to/photos --apply    # move files to _Quarantine
     photo_cleanup /path/to/photos --undo     # put everything back
+    photo_cleanup --gui [/path/to/photos]    # the graphical interface, from here
 
-Started without arguments, for example by double-clicking it, it asks for the
-folder instead.
+The graphical interface opens in your web browser. Without a screen, for
+example over SSH, photo_cleanup asks for the folder in the terminal instead.
 `
 
 func main() {
 	in := bufio.NewReader(os.Stdin)
 	var code int
-	if len(os.Args) == 1 && isTerminal(os.Stdin) {
+	switch {
+	case len(os.Args) == 1 && hasDisplay():
+		code = gui(os.Args[0], "", os.Stdout)
+	case len(os.Args) == 1 && isTerminal(os.Stdin):
 		code = interactive(os.Args[0], in, os.Stdout, os.Stderr)
 		pause(in, os.Stdout)
-	} else {
+	case len(os.Args) == 2 && ownsConsole() && !strings.HasPrefix(os.Args[1], "-"):
+		// A folder dropped onto the program in Explorer.
+		code = gui(os.Args[0], os.Args[1], os.Stdout)
+	default:
 		code = run(os.Args, os.Stdout, os.Stderr)
 		if ownsConsole() {
 			pause(in, os.Stdout)
@@ -126,7 +137,7 @@ func main() {
 
 // run is the command line version. args includes the program name.
 func run(args []string, stdout, stderr io.Writer) int {
-	var applyIt, undoIt bool
+	var applyIt, undoIt, guiIt bool
 	var folders []string
 	for _, a := range args[1:] {
 		switch {
@@ -134,6 +145,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			applyIt = true
 		case a == "--undo":
 			undoIt = true
+		case a == "--gui":
+			guiIt = true
 		case a == "-h" || a == "--help":
 			fmt.Fprint(stdout, usage)
 			return 0
@@ -144,7 +157,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			folders = append(folders, a)
 		}
 	}
-	if len(folders) != 1 || (applyIt && undoIt) {
+	if guiIt && !applyIt && !undoIt && len(folders) <= 1 {
+		return gui(args[0], strings.Join(folders, ""), stdout)
+	}
+	if guiIt || len(folders) != 1 || (applyIt && undoIt) {
 		fmt.Fprint(stdout, usage)
 		return 2
 	}
@@ -154,27 +170,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Not a folder: %s\n", root)
 		return 2
 	}
+	r, done := terminalReporter(stdout, stderr)
+	defer done()
 	if undoIt {
-		return undo(root, stdout, stderr)
+		return undoInTerminal(root, r)
 	}
 
-	p := prepare(root, stdout, stderr)
+	p, ok := prepare(root, r)
+	if !ok {
+		r.warnf("\ninterrupted, nothing was moved\n")
+		return 130
+	}
 	if applyIt {
-		if code := p.apply(stdout, stderr); code != 0 {
+		if code := p.apply(r); code != 0 {
 			return code
 		}
 	}
-	if code := p.report(args[0], stdout, stderr); code != 0 {
+	if code := p.report(args[0], r); code != 0 {
 		return code
 	}
 	if !applyIt {
-		fmt.Fprintln(stdout, "\nNothing was moved. Re-run with --apply when the lists look right.")
+		r.printf("\nNothing was moved. Re-run with --apply when the lists look right.\n")
 	}
 	return 0
 }
 
-// interactive asks for the folder and what to do, for when the program is
-// double-clicked rather than started from a terminal.
+// interactive asks for the folder and what to do in the terminal, for when
+// there is no screen to show the graphical interface on.
 func interactive(prog string, in *bufio.Reader, out, errOut io.Writer) int {
 	fmt.Fprint(out, "photo_cleanup moves duplicate photos and videos, and files that are not\n"+
 		"photos or videos, into a _Quarantine folder inside the folder you choose.\n"+
@@ -203,12 +225,18 @@ func interactive(prog string, in *bufio.Reader, out, errOut io.Writer) int {
 	if !ok {
 		return 2
 	}
+	r, done := terminalReporter(out, errOut)
+	defer done()
 	if choice == "2" {
-		return undo(root, out, errOut)
+		return undoInTerminal(root, r)
 	}
 
-	p := prepare(root, out, errOut)
-	if code := p.report(prog, out, errOut); code != 0 {
+	p, ok := prepare(root, r)
+	if !ok {
+		r.warnf("\ninterrupted, nothing was moved\n")
+		return 130
+	}
+	if code := p.report(prog, r); code != 0 {
 		return code
 	}
 	if len(p.moves) == 0 {
@@ -221,7 +249,7 @@ func interactive(prog string, in *bufio.Reader, out, errOut io.Writer) int {
 		fmt.Fprintln(out, "Nothing was moved. The lists are in", filepath.Join(root, quarantine))
 		return 0
 	}
-	if code := p.apply(out, errOut); code != 0 {
+	if code := p.apply(r); code != 0 {
 		return code
 	}
 	if _, err := p.writeReports(prog); err != nil {
@@ -316,23 +344,49 @@ func isTerminal(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// interrupts reports whether Ctrl+C has been pressed since it was created,
-// so moves can stop between two files instead of in the middle of one.
-func interrupts() (pressed func() bool, stop func()) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
-	seen := false
-	pressed = func() bool {
-		if !seen {
+// reporter is where a run reports what it does: lines of text for people, and
+// done/total counts for the progress bars of the graphical interface. stop,
+// when set, asks the run to stop at the next safe point, between two files.
+type reporter struct {
+	out, errOut io.Writer
+	step        func(phase string, done, total int64, item string)
+	stop        func() bool
+}
+
+func (r *reporter) printf(format string, args ...any) { fmt.Fprintf(r.out, format, args...) }
+func (r *reporter) warnf(format string, args ...any)  { fmt.Fprintf(r.errOut, format, args...) }
+func (r *reporter) stopped() bool                     { return r.stop != nil && r.stop() }
+
+func (r *reporter) progress(phase string, done, total int64, item string) {
+	if r.step != nil {
+		r.step(phase, done, total, item)
+	}
+}
+
+// terminalReporter reports to the terminal. The first Ctrl+C asks the run to
+// stop between two files; a second one quits at once.
+func terminalReporter(out, errOut io.Writer) (*reporter, func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	var stop atomic.Bool
+	quit := make(chan struct{})
+	go func() {
+		for {
 			select {
-			case <-ch:
-				seen = true
-			default:
+			case <-signals:
+				if stop.Swap(true) {
+					os.Exit(130)
+				}
+				fmt.Fprintln(os.Stderr, "\nStopping after the current file. Press Ctrl+C again to quit at once.")
+			case <-quit:
+				return
 			}
 		}
-		return seen
+	}()
+	return &reporter{out: out, errOut: errOut, stop: stop.Load}, func() {
+		signal.Stop(signals)
+		close(quit)
 	}
-	return pressed, func() { signal.Stop(ch) }
 }
 
 func setOf(items ...string) map[string]bool {

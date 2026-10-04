@@ -90,6 +90,9 @@ func rels(files []*file) []string {
 	return out
 }
 
+// quiet is a reporter that throws everything away.
+func quiet() *reporter { return &reporter{out: io.Discard, errOut: io.Discard} }
+
 func symlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
@@ -191,7 +194,7 @@ func TestExtensionAndStemFollowPythonPathlib(t *testing.T) {
 
 func TestScanSortsFilesIntoMediaAndOther(t *testing.T) {
 	root := library(t)
-	res := scan(root, io.Discard)
+	res := scan(root, quiet())
 	if got, want := rels(res.media), []string{"Trip/IMG_1 (1).jpg", "Trip/IMG_1.jpg", "Trip/IMG_2.jpg"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("media %q, want %q", got, want)
 	}
@@ -212,7 +215,7 @@ func TestScanSkipsSymlinksAndQuarantineFolders(t *testing.T) {
 	symlink(t, photo, filepath.Join(root, "link.jpg"))
 	symlink(t, outside, filepath.Join(root, "linked folder"))
 
-	res := scan(root, io.Discard)
+	res := scan(root, quiet())
 	if got := rels(res.media); !reflect.DeepEqual(got, []string{"IMG_1.jpg"}) {
 		t.Errorf("media %q", got)
 	}
@@ -287,7 +290,7 @@ func TestOnlyByteIdenticalFilesAreDuplicates(t *testing.T) {
 	write(t, root, "d/IMG_1.jpg", string(tweaked))
 	write(t, root, "e/IMG_9.jpg", "something else")
 
-	groups := findDuplicates(scan(root, io.Discard).media, io.Discard, io.Discard)
+	groups := findDuplicates(scan(root, quiet()).media, quiet())
 	if len(groups) != 1 || len(groups[0].losers) != 2 {
 		t.Fatalf("got %d groups", len(groups))
 	}
@@ -304,11 +307,11 @@ func TestHardLinksAreOneFileNotDuplicates(t *testing.T) {
 	if err := os.Link(photo, filepath.Join(root, "Album", "IMG_1.jpg")); err != nil {
 		t.Skip("cannot create hard links here:", err)
 	}
-	media := scan(root, io.Discard).media
+	media := scan(root, quiet()).media
 	if len(media) != 2 {
 		t.Fatalf("found %d files", len(media))
 	}
-	if groups := findDuplicates(media, io.Discard, io.Discard); len(groups) != 0 {
+	if groups := findDuplicates(media, quiet()); len(groups) != 0 {
 		t.Errorf("hard links reported as %d duplicate groups", len(groups))
 	}
 }
@@ -328,7 +331,7 @@ func TestUnreadableFileIsReportedAndLeftAlone(t *testing.T) {
 	defer os.Chmod(locked, 0o644)
 
 	var errOut bytes.Buffer
-	if groups := findDuplicates(scan(root, io.Discard).media, io.Discard, &errOut); len(groups) != 0 {
+	if groups := findDuplicates(scan(root, quiet()).media, &reporter{out: io.Discard, errOut: &errOut}); len(groups) != 0 {
 		t.Errorf("got %d groups", len(groups))
 	}
 	if !strings.Contains(errOut.String(), "cannot read") {
@@ -345,7 +348,7 @@ func TestUnreadableFolderIsReportedAndSkipped(t *testing.T) {
 	defer os.Chmod(locked, 0o755)
 
 	var errOut bytes.Buffer
-	res := scan(root, &errOut)
+	res := scan(root, &reporter{out: io.Discard, errOut: &errOut})
 	if len(res.media) != 1 || res.skipped != 1 {
 		t.Errorf("media %q, skipped %d", rels(res.media), res.skipped)
 	}
@@ -603,6 +606,77 @@ func TestUniquifyFindsTheNextFreeName(t *testing.T) {
 	}
 }
 
+func TestProgressCoversEveryPhase(t *testing.T) {
+	root := library(t)
+	var phases []string
+	last := map[string][2]int64{}
+	r := quiet()
+	r.step = func(phase string, done, total int64, item string) {
+		if len(phases) == 0 || phases[len(phases)-1] != phase {
+			phases = append(phases, phase)
+		}
+		last[phase] = [2]int64{done, total}
+	}
+	p, ok := prepare(root, r)
+	if !ok {
+		t.Fatal("stopped")
+	}
+	p.apply(r)
+	if want := []string{"scan", "fingerprint", "hash", "move"}; !reflect.DeepEqual(phases, want) {
+		t.Errorf("phases %q, want %q", phases, want)
+	}
+	if got := last["hash"]; got != [2]int64{18, 18} { // hashing counts bytes: two 9-byte photos
+		t.Errorf("hash progress ended at %v", got)
+	}
+	if got := last["move"]; got != [2]int64{3, 3} {
+		t.Errorf("move progress ended at %v", got)
+	}
+}
+
+func TestStoppingAMoveLeavesAnUndoableJournal(t *testing.T) {
+	root := library(t)
+	before := files(t, root)
+	p, _ := prepare(root, quiet())
+	checks := 0
+	r := quiet()
+	r.stop = func() bool { checks++; return checks > 2 }
+	if code := p.apply(r); code != 130 || p.moved != 2 || !p.stopped {
+		t.Fatalf("exit %d after %d moves", code, p.moved)
+	}
+	if got := len(journalLines(t, root)); got != 2 {
+		t.Errorf("journal has %d lines, want 2", got)
+	}
+	runOK(t, root, "--undo")
+	if got := files(t, root); !reflect.DeepEqual(got, before) {
+		t.Errorf("after undo %v", got)
+	}
+}
+
+func TestStoppingAScanChangesNothing(t *testing.T) {
+	root := library(t)
+	r := quiet()
+	r.stop = func() bool { return true }
+	if p, ok := prepare(root, r); ok || p != nil {
+		t.Fatal("a stopped scan must not make a plan")
+	}
+	if exist(root, quarantine) {
+		t.Error("a stopped scan must not write anything")
+	}
+}
+
+func TestLeaveOutKeepsChosenFilesInPlace(t *testing.T) {
+	root := library(t)
+	p, _ := prepare(root, quiet())
+	p.leaveOut(true, setOf("(empty)"))
+	if len(p.moves) != 1 || p.moves[0].from != "Notes/notes.txt" {
+		t.Fatalf("moves %+v", p.moves)
+	}
+	p.apply(quiet())
+	if !exist(root, "Trip/IMG_1 (1).jpg") || !exist(root, "empty.jpg") || exist(root, "Notes/notes.txt") {
+		t.Errorf("left %v", files(t, root))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // reports
 
@@ -714,6 +788,7 @@ func TestRunsAsAProgram(t *testing.T) {
 	}{
 		{[]string{root}, 0, "Nothing was moved"},
 		{[]string{root, "--bogus"}, 2, "Unknown option --bogus"},
+		{[]string{"--gui", "--apply"}, 2, "Usage:"},
 	} {
 		cmd := exec.Command(os.Args[0], tc.args...)
 		cmd.Env = append(os.Environ(), "PHOTO_CLEANUP_RUN_MAIN=1")

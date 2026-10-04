@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -12,14 +12,28 @@ import (
 )
 
 // report writes the reports and prints the summary.
-func (p *plan) report(prog string, out, errOut io.Writer) int {
+func (p *plan) report(prog string, r *reporter) int {
 	summary, err := p.writeReports(prog)
 	if err != nil {
-		fmt.Fprintf(errOut, "  ! could not write the reports: %v\n", err)
+		r.warnf("  ! could not write the reports: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(out, "\n%s\n", summary)
+	r.printf("\n%s\n", summary)
 	return 0
+}
+
+// typeOf is a non-media file's extension, or "(none)", as not-media.csv lists it.
+func typeOf(f *file) string {
+	return or(extension(path.Base(f.rel)), "(none)")
+}
+
+// groupOf is how the graphical interface sorts non-media files: by type, with
+// the empty ones apart, since an empty "photo.jpg" is no photo either.
+func groupOf(f *file) string {
+	if f.size == 0 {
+		return "(empty)"
+	}
+	return typeOf(f)
 }
 
 // writeReports writes duplicates.csv, not-media.csv and summary.txt into the
@@ -39,7 +53,7 @@ func (p *plan) writeReports(prog string) (string, error) {
 	var other strings.Builder
 	other.WriteString("path,size,extension\n")
 	for _, f := range p.scan.other {
-		other.WriteString(csvRow(filepath.FromSlash(f.rel), f.size, or(extension(filepath.Base(f.path)), "(none)")))
+		other.WriteString(csvRow(filepath.FromSlash(f.rel), f.size, typeOf(f)))
 	}
 
 	var dupFiles int
@@ -54,7 +68,7 @@ func (p *plan) writeReports(prog string) (string, error) {
 	counts := map[string]int{}
 	for _, f := range p.scan.other {
 		otherBytes += f.size
-		ext := or(extension(filepath.Base(f.path)), "(no extension)")
+		ext := or(extension(path.Base(f.rel)), "(no extension)")
 		if counts[ext] == 0 {
 			exts = append(exts, ext)
 		}

@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo cleanup</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7; --card: #fff; --text: #1c2230; --muted: #5f6878; --line: #e1e4ea;
+  --accent: #2563eb; --accent-hover: #1d4fc4; --accent-soft: #eaf0ff; --on-accent: #fff;
+  --good: #187a4c; --good-soft: #e4f4eb; --warn: #8f5500; --warn-soft: #fff3de;
+  --track: #e5e8ee; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418; --card: #1b1e24; --text: #e7eaf0; --muted: #9aa2b2; --line: #2b3039;
+    --accent: #6b97ff; --accent-hover: #87abff; --accent-soft: #1d2843; --on-accent: #0b1020;
+    --good: #57c592; --good-soft: #142a20; --warn: #f0b45c; --warn-soft: #2c2312; --track: #2a2f38;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 28px 16px 48px; }
+header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+header > div { flex: 1; }
+h1 { margin: 0; font-size: 24px; }
+header p { margin: 4px 0 0; color: var(--muted); }
+code { font-family: var(--mono); font-size: .92em; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.card h2 { margin: 0 0 12px; font-size: 17px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+input[type=text] { flex: 1; min-width: 220px; padding: 9px 12px; font: 14px var(--mono); color: inherit;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button:disabled { opacity: .5; cursor: default; }
+button.link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 13px; }
+.status { margin: 8px 0 0; min-height: 1.5em; color: var(--muted); font-size: 14px; }
+.status.good { color: var(--good); }
+.status.bad { color: var(--warn); }
+.note { padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); margin: 14px 0 0; font-size: 14px; }
+.note.warn { background: var(--warn-soft); color: var(--warn); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+
+.steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.steps span { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--track); color: var(--muted); }
+.steps span.now { background: var(--accent); color: var(--on-accent); }
+.steps span.past { background: var(--good-soft); color: var(--good); }
+.bar { height: 10px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s; }
+.bar.waiting > div { width: 30%; animation: slide 1.3s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.numbers { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 14px; }
+.item { font: 12px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 6px; min-height: 1.4em; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.tile b { display: block; font-size: 22px; }
+.tile span { color: var(--muted); font-size: 13px; }
+.section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+.section h3 { margin: 0 0 4px; font-size: 15px; }
+.section h3 label { display: inline-flex; gap: 8px; align-items: center; }
+.section > p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+.group { padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.group:last-child { border-bottom: 0; }
+.path { font: 13px var(--mono); overflow-wrap: anywhere; }
+.keep { color: var(--good); }
+.copy { color: var(--muted); padding-left: 20px; }
+.why { color: var(--muted); font-size: 13px; }
+.type { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.type:last-child { border-bottom: 0; }
+.type label { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
+.type ul { flex-basis: 100%; margin: 6px 0 2px 24px; padding: 0; list-style: none; max-height: 240px; overflow: auto; }
+.big { font-size: 18px; margin: 0 0 6px; }
+.big.good { color: var(--good); }
+details > summary { cursor: pointer; color: var(--muted); }
+#log { margin-top: 10px; max-height: 280px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+#log .warn { color: var(--warn); }
+#closed { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); text-align: center; padding: 24px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Photo cleanup</h1>
+      <p>Moves duplicate photos and videos, and files that aren't photos or videos, into a <code>_Quarantine</code>
+        folder. Nothing is deleted, and everything can be put back.</p>
+    </div>
+    <button id="quit">Quit</button>
+  </header>
+
+  <section class="card" id="choose">
+    <h2>1. Choose a folder</h2>
+    <div class="row">
+      <input type="text" id="path" placeholder="Paste the folder's location, or click Choose…" spellcheck="false" autocomplete="off">
+      <button id="pick">Choose…</button>
+    </div>
+    <p class="status" id="pathStatus"></p>
+    <div class="actions">
+      <button class="primary" id="scan" disabled>Find duplicates</button>
+      <button id="undo" hidden>Undo the earlier clean-up</button>
+    </div>
+  </section>
+
+  <section class="card" id="progress" hidden>
+    <h2 id="progressTitle">Working…</h2>
+    <div class="steps" id="steps"></div>
+    <div class="bar" id="bar" role="progressbar" aria-labelledby="progressTitle"><div></div></div>
+    <div class="numbers"><span id="progressText"></span><span id="progressTime"></span></div>
+    <div class="item" id="progressItem"></div>
+    <div class="actions"><button id="stop">Stop</button></div>
+  </section>
+
+  <section class="card" id="review" hidden></section>
+  <section class="card" id="result" hidden></section>
+
+  <details class="card" id="details">
+    <summary>Details</summary>
+    <div id="log"></div>
+  </details>
+</main>
+<div id="closed" hidden>
+  <div><h2>photo_cleanup has closed</h2><p>You can close this tab. Start photo_cleanup again to carry on.</p></div>
+</div>
+<script>
+'use strict';
+const token = location.hash.slice(1);
+const $ = (id) => document.getElementById(id);
+
+// el builds an element. Text always goes in as text, never as HTML, because
+// file names can contain anything.
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c != null && c !== false) e.append(c instanceof Node ? c : String(c));
+  }
+  return e;
+}
+
+function human(n) {
+  if (n < 1024) return n + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let f = n / 1024, i = 0;
+  while (f >= 1024 && i < units.length - 1) { f /= 1024; i++; }
+  return f.toFixed(1) + ' ' + units[i];
+}
+const count = (n, one, many) => n.toLocaleString() + ' ' + (n === 1 ? one : many || one + 's');
+function clock(ms) {
+  const s = Math.floor(ms / 1000);
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function about(ms) {
+  return ms >= 90000 ? 'about ' + Math.round(ms / 60000) + ' min left' : 'about ' + Math.max(1, Math.round(ms / 1000)) + ' s left';
+}
+
+async function api(path, body) {
+  const res = await fetch('/api/' + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'X-Token': token, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  return res.json();
+}
+
+// ---- 1. choosing the folder ----
+
+let checked = null;  // what the program said about the folder in the box
+let checkTimer = 0;
+let busy = false;
+
+async function check() {
+  const path = $('path').value;
+  let answer = null;
+  if (path.trim()) {
+    try { answer = await api('check', { path }); } catch (e) { answer = null; }
+  }
+  if ($('path').value !== path) return;  // typed on meanwhile
+  checked = answer;
+  showCheck();
+}
+
+function showCheck() {
+  const st = $('pathStatus');
+  const ok = !!(checked && checked.ok);
+  st.className = 'status';
+  st.textContent = '';
+  $('scan').disabled = busy || !ok;
+  $('undo').hidden = !(ok && checked.journal > 0);
+  $('undo').disabled = busy;
+  if (!$('path').value.trim() || !checked) return;
+  if (!ok) {
+    st.classList.add('bad');
+    st.textContent = 'There is no folder at ' + checked.path;
+  } else if (checked.journal > 0) {
+    st.classList.add('good');
+    st.textContent = `Found it. An earlier clean-up moved ${count(checked.journal, 'file')} into _Quarantine here.`;
+    $('undo').textContent = `Undo the earlier clean-up (${count(checked.journal, 'file')})`;
+  } else {
+    st.classList.add('good');
+    st.textContent = 'Found it: ' + checked.path;
+  }
+}
+
+$('path').addEventListener('input', () => {
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(check, 250);
+});
+$('path').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !$('scan').disabled) $('scan').click();
+});
+$('pick').addEventListener('click', async () => {
+  $('pick').disabled = true;
+  try {
+    const r = await api('pick', {});
+    if (r.unavailable) {
+      $('pathStatus').className = 'status bad';
+      $('pathStatus').textContent = "This computer has no folder picker. Copy the folder's location from your file manager and paste it here.";
+    } else if (r.path) {
+      $('path').value = r.path;
+      await check();
+    }
+  } catch (e) { showError(e); }
+  $('pick').disabled = busy;
+});
+$('scan').addEventListener('click', () => start('scan', { path: $('path').value }));
+$('undo').addEventListener('click', () => start('undo', { path: $('path').value }));
+$('stop').addEventListener('click', () => {
+  $('stop').disabled = true;
+  $('stop').textContent = 'Stopping…';
+  api('stop', {}).catch(() => {});
+});
+$('quit').addEventListener('click', () => {
+  api('quit', {}).catch(() => {});
+  showClosed();
+});
+
+async function start(kind, body) {
+  $('review').hidden = true;
+  $('result').hidden = true;
+  try { await api(kind, body); } catch (e) { showError(e); return; }
+  poll();
+}
+
+// ---- progress ----
+
+const phases = {
+  scan: ['Looking through the folder', 'Find files'],
+  fingerprint: ['Fingerprinting files of the same size', 'Fingerprint'],
+  hash: ['Comparing file contents', 'Compare'],
+  move: ['Moving files to _Quarantine', 'Move'],
+  undo: ['Putting files back', 'Undo'],
+};
+const jobPhases = { scan: ['scan', 'fingerprint', 'hash'] };
+
+let job = -1, since = 0, shown = -1, failures = 0, pollTimer = 0, prefilled = false;
+let jobStart = 0, phase = '', phaseStart = 0;
+
+async function poll() {
+  clearTimeout(pollTimer);
+  let s;
+  try {
+    s = await api(`state?job=${job}&since=${since}`);
+    failures = 0;
+  } catch (e) {
+    if (++failures >= 3) { showClosed(); return; }
+    pollTimer = setTimeout(poll, 1000);
+    return;
+  }
+  if (s.job !== job) {
+    job = s.job;
+    $('log').replaceChildren();
+    jobStart = Date.now();
+    phase = '';
+  }
+  addLog(s.log || []);
+  since = s.next;
+  if (!prefilled) {
+    prefilled = true;
+    if (s.folder && !$('path').value) { $('path').value = s.folder; check(); }
+  }
+  showProgress(s);
+  if (!s.busy && s.result && shown !== s.job) {
+    shown = s.job;
+    showResultOf(s.result);
+  }
+  pollTimer = setTimeout(poll, s.busy ? 250 : 2000);
+}
+
+function showProgress(s) {
+  busy = s.busy;
+  $('progress').hidden = !busy;
+  $('path').disabled = busy;
+  $('pick').disabled = busy;
+  showCheck();
+  if (!busy) {
+    $('stop').disabled = false;
+    $('stop').textContent = 'Stop';
+    document.title = 'Photo cleanup';
+    return;
+  }
+  if (s.phase !== phase) { phase = s.phase; phaseStart = Date.now(); }
+  const [title] = phases[s.phase] || ['Working'];
+  $('progressTitle').textContent = title + '…';
+
+  const steps = jobPhases[s.kind] || [];
+  const at = steps.indexOf(s.phase);
+  $('steps').hidden = steps.length < 2;
+  $('steps').replaceChildren(...steps.map((p, i) =>
+    el('span', { class: i === at ? 'now' : i < at ? 'past' : '' }, (i < at ? '✓ ' : '') + phases[p][1])));
+
+  const bar = $('bar');
+  const share = s.total > 0 ? Math.min(1, s.done / s.total) : 0;
+  bar.classList.toggle('waiting', !(s.total > 0));
+  bar.firstElementChild.style.width = s.total > 0 ? (100 * share).toFixed(1) + '%' : '';
+  bar.setAttribute('aria-valuenow', Math.floor(100 * share));
+
+  let text;
+  if (s.phase === 'scan') text = count(s.done, 'file') + ' found so far';
+  else if (s.phase === 'hash') text = `${human(s.done)} of ${human(s.total)}`;
+  else text = `${s.done.toLocaleString()} of ${count(s.total, 'file')}`;
+  if (s.total > 0) text += ` · ${Math.floor(100 * share)}%`;
+  $('progressText').textContent = text;
+
+  let time = clock(Date.now() - jobStart);
+  const spent = Date.now() - phaseStart;
+  if (s.total > 0 && s.done > 0 && spent > 3000) {
+    const left = spent * (s.total - s.done) / s.done;
+    if (left > 3000) time += ' · ' + about(left);
+  }
+  $('progressTime').textContent = time;
+  $('progressItem').textContent = s.item;
+  document.title = (s.total > 0 ? Math.floor(100 * share) + '% · ' : '') + title + ' · Photo cleanup';
+}
+
+function addLog(lines) {
+  const log = $('log');
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  for (const l of lines) log.append(el('div', l.warn ? { class: 'warn' } : {}, l.text || ' '));
+  while (log.childElementCount > 3000) log.firstElementChild.remove();
+  if (lines.length && atEnd) log.scrollTop = log.scrollHeight;
+}
+
+// ---- results ----
+
+function showResultOf(r) {
+  if (r.kind === 'preview') showReview(r);
+  else if (r.kind === 'moved') showMoved(r);
+  else if (r.kind === 'undone') showUndone(r);
+  else if (r.kind === 'stopped') showCard([el('h2', {}, 'Stopped'), el('p', {}, 'The scan was stopped before it finished. Nothing was moved.'), actions(button('OK', reset, true))]);
+  else showError(new Error(r.error || 'Something went wrong.'));
+}
+
+function button(label, onclick, primary) {
+  return el('button', { class: primary ? 'primary' : '', onclick }, label);
+}
+function actions(...buttons) { return el('div', { class: 'actions' }, buttons); }
+function tile(big, small) { return el('div', { class: 'tile' }, el('b', {}, big), el('span', {}, small)); }
+function reveal(what) { api('reveal', { what }).catch(showError); }
+
+function showCard(parts) {
+  $('review').hidden = true;
+  $('result').replaceChildren(...parts);
+  $('result').hidden = false;
+}
+
+function showError(e) {
+  showCard([el('h2', {}, 'Something went wrong'), el('p', { class: 'note warn' }, e.message || String(e)), actions(button('OK', reset, true))]);
+}
+
+function reset() {
+  $('review').hidden = true;
+  $('result').hidden = true;
+  $('path').focus();
+  check();
+}
+
+let review = null;  // the preview being shown
+
+function showReview(r) {
+  review = r;
+  const parts = [
+    el('h2', {}, '2. Check what will move'),
+    el('div', { class: 'tiles' },
+      tile(count(r.dupFiles, 'duplicate'), human(r.dupBytes) + ' of extra copies'),
+      tile(count(r.otherFiles, 'other file'), human(r.otherBytes) + " that aren't photos or videos"),
+      tile(r.media.toLocaleString(), 'photos and videos looked at'),
+      tile((r.system + r.skipped).toLocaleString(), 'system files and links left alone')),
+  ];
+  if (r.journal > 0) {
+    parts.push(el('p', { class: 'note' }, `An earlier clean-up already moved ${count(r.journal, 'file')} into _Quarantine here. Moving more adds to them, and Undo puts back all of them.`));
+  }
+  if (r.dupFiles + r.otherFiles === 0) {
+    parts.push(el('p', { class: 'big good' }, "✓ Nothing to clean up: no duplicates, and nothing that isn't a photo or video."));
+    parts.push(actions(button('Choose another folder', reset, true)));
+    $('result').hidden = true;
+    $('review').replaceChildren(...parts);
+    $('review').hidden = false;
+    return;
+  }
+
+  if (r.dupFiles > 0) {
+    const groups = el('div', {});
+    const list = (n) => groups.replaceChildren(...r.groups.slice(0, n).map((g) => el('div', { class: 'group' },
+      el('div', { class: 'keep' }, '✓ ', el('span', { class: 'path' }, g.keep), ' ', el('span', { class: 'why' }, `stays (${g.reason}) · ${human(g.size)}`)),
+      g.copies.map((c) => el('div', { class: 'copy' }, '→ ', el('span', { class: 'path' }, c))))));
+    list(15);
+    const all = r.groups.length > 15 ? el('button', { class: 'link', onclick: (e) => { list(r.groups.length); e.target.remove(); } }, `Show all ${r.groups.length.toLocaleString()} groups`) : null;
+    parts.push(el('div', { class: 'section' },
+      el('h3', {}, el('label', {}, el('input', { type: 'checkbox', id: 'dups', checked: true, onchange: updateMove }),
+        `Duplicates: ${count(r.dupFiles, 'extra copy', 'extra copies')}, ${human(r.dupBytes)}`)),
+      el('p', {}, 'Byte-for-byte identical files. The copy marked ✓ stays where it is, and the others move to _Quarantine/duplicates.'),
+      groups, all,
+      r.moreGroups > 0 ? el('p', { class: 'why' }, `…and ${count(r.moreGroups, 'more group')}, listed in duplicates.csv.`) : null));
+  }
+
+  if (r.otherFiles > 0) {
+    parts.push(el('div', { class: 'section' },
+      el('h3', {}, `Not photos or videos: ${count(r.otherFiles, 'file')}, ${human(r.otherBytes)}`),
+      el('p', {}, 'These move to _Quarantine/not-media. Untick a type to leave its files where they are.'),
+      r.types.map((t) => {
+        const files = el('ul', { hidden: true }, t.paths.map((p) => el('li', { class: 'path' }, p)),
+          t.files > t.paths.length ? el('li', { class: 'why' }, `…and ${count(t.files - t.paths.length, 'more file')}, listed in not-media.csv`) : null);
+        const toggle = el('button', { class: 'link', onclick: () => { files.hidden = !files.hidden; toggle.textContent = files.hidden ? 'Show files' : 'Hide files'; } }, 'Show files');
+        return el('div', { class: 'type' },
+          el('label', {}, el('input', { type: 'checkbox', checked: true, 'data-type': t.type, onchange: updateMove }), typeName(t.type)),
+          el('span', { class: 'why' }, `${count(t.files, 'file')}, ${human(t.bytes)}`), toggle, files);
+      })));
+  }
+
+  parts.push(el('p', { class: 'note' }, `Files move into ${r.quarantine}, keeping the folders they came from. Nothing is deleted, and Undo puts everything back. The lists are also saved there as duplicates.csv and not-media.csv.`));
+  parts.push(actions(el('button', { class: 'primary', id: 'move', onclick: move }), button('Open the lists', () => reveal('quarantine')), button('Choose another folder', reset)));
+  $('result').hidden = true;
+  $('review').replaceChildren(...parts);
+  $('review').hidden = false;
+  updateMove();
+}
+
+function typeName(t) {
+  return t === '(empty)' ? 'Empty files' : t === '(none)' ? 'No extension' : '.' + t;
+}
+
+function selection() {
+  const dups = $('dups');
+  const skipDuplicates = !!dups && !dups.checked;
+  const skipTypes = [];
+  let files = skipDuplicates ? 0 : review.dupFiles, bytes = skipDuplicates ? 0 : review.dupBytes;
+  for (const box of document.querySelectorAll('#review input[data-type]')) {
+    const t = review.types.find((t) => t.type === box.dataset.type);
+    if (box.checked) { files += t.files; bytes += t.bytes; } else skipTypes.push(t.type);
+  }
+  return { skipDuplicates, skipTypes, files, bytes };
+}
+
+function updateMove() {
+  const s = selection();
+  $('move').disabled = s.files === 0;
+  $('move').textContent = s.files === 0 ? 'Nothing chosen to move' : `Move ${count(s.files, 'file')} (${human(s.bytes)}) to _Quarantine`;
+}
+
+function move() {
+  const s = selection();
+  start('move', { skipDuplicates: s.skipDuplicates, skipTypes: s.skipTypes });
+}
+
+function showMoved(r) {
+  const parts = [el('h2', {}, '3. Done')];
+  if (r.stopped) parts.push(el('p', { class: 'big' }, `Stopped after moving ${count(r.moved, 'file')} (${human(r.bytes)}).`));
+  else parts.push(el('p', { class: 'big good' }, `✓ Moved ${count(r.moved, 'file')} (${human(r.bytes)}) to _Quarantine.`));
+  if (r.failed > 0) parts.push(el('p', { class: 'note warn' }, `${count(r.failed, 'file')} could not be moved. Details, below, says why.`));
+  parts.push(el('p', {}, `Look through ${r.quarantine}. When you are happy, delete that folder to free up the space. If something should not have moved, Undo puts everything back.`));
+  parts.push(actions(button('Open _Quarantine', () => reveal('quarantine'), true), button('Undo', () => start('undo', { path: r.folder })), button('Clean up another folder', reset)));
+  showCard(parts);
+  if (r.failed > 0) $('details').open = true;
+  check();
+}
+
+function showUndone(r) {
+  const parts = [el('h2', {}, 'Undo'), el('p', { class: 'big good' }, `✓ Put back ${count(r.restored, 'file')}.`)];
+  if (r.stopped) parts.push(el('p', { class: 'note warn' }, 'Stopped before everything was back. The rest is still in _Quarantine, and Undo can finish the job.'));
+  if (r.missing > 0) parts.push(el('p', { class: 'note warn' }, `${count(r.missing, 'file')} ${r.missing === 1 ? 'was' : 'were'} no longer in _Quarantine, so there was nothing to put back.`));
+  if (r.blocked > 0) {
+    parts.push(el('p', { class: 'note warn' }, `${count(r.blocked, 'file')} could not go back, because something new is in their place. They stay in _Quarantine, and Undo can put them back once their places are free. Details, below, lists them.`));
+    $('details').open = true;
+  }
+  parts.push(actions(button('Open the folder', () => reveal('folder'), true), button('Done', reset)));
+  showCard(parts);
+  check();
+}
+
+// ---- closing ----
+
+function showClosed() {
+  clearTimeout(pollTimer);
+  $('closed').hidden = false;
+}
+
+window.addEventListener('pagehide', () => navigator.sendBeacon('/api/bye?token=' + encodeURIComponent(token)));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+
+if (!token) {
+  $('closed').querySelector('h2').textContent = 'Open photo_cleanup from its own window';
+  $('closed').querySelector('p').textContent = 'This page only works through the link photo_cleanup opens, or prints, when it starts.';
+  $('closed').hidden = false;
+} else {
+  poll();
+  $('path').focus();
+}
+</script>
+</body>
+</html>

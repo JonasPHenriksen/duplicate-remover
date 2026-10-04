@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -18,6 +17,7 @@ import (
 // or opened on another operating system.
 type move struct {
 	from, to string
+	size     int64
 }
 
 // One line of _Quarantine/journal.jsonl.
@@ -33,65 +33,93 @@ type plan struct {
 	groups        []group
 	moves         []move
 	moved, failed int
+	movedBytes    int64
 	applied       bool
+	stopped       bool
 }
 
-// prepare scans the folder and works out what to move.
-func prepare(root string, out, errOut io.Writer) *plan {
-	fmt.Fprintf(out, "Scanning %s\n", root)
-	res := scan(root, errOut)
-	fmt.Fprintf(out, "  %d photos/videos, %d other files\n", len(res.media), len(res.other))
+// prepare scans the folder and works out what to move. It returns false when
+// the run was stopped before it got that far.
+func prepare(root string, r *reporter) (*plan, bool) {
+	r.printf("Scanning %s\n", root)
+	res := scan(root, r)
+	if r.stopped() {
+		return nil, false
+	}
+	r.printf("  %d photos/videos, %d other files\n", len(res.media), len(res.other))
 	if res.skipped > 0 {
-		fmt.Fprintf(out, "  %d symlinks or unreadable entries skipped\n", res.skipped)
+		r.printf("  %d symlinks or unreadable entries skipped\n", res.skipped)
 	}
 	if res.system > 0 {
-		fmt.Fprintf(out, "  %d system files and folders left alone\n", res.system)
+		r.printf("  %d system files and folders left alone\n", res.system)
 	}
 
-	fmt.Fprintln(out, "Looking for duplicates")
-	groups := findDuplicates(res.media, out, errOut)
+	r.printf("Looking for duplicates\n")
+	groups := findDuplicates(res.media, r)
+	if r.stopped() {
+		return nil, false
+	}
+	return &plan{root: root, scan: res, groups: groups, moves: planMoves(groups, res.other)}, true
+}
 
-	p := &plan{root: root, scan: res, groups: groups}
+func planMoves(groups []group, other []*file) []move {
+	var moves []move
 	for _, g := range groups {
 		for _, f := range g.losers {
-			p.moves = append(p.moves, move{f.rel, quarantine + "/" + dupDir + "/" + f.rel})
+			moves = append(moves, move{f.rel, quarantine + "/" + dupDir + "/" + f.rel, f.size})
 		}
 	}
-	for _, f := range res.other {
-		p.moves = append(p.moves, move{f.rel, quarantine + "/" + otherDir + "/" + f.rel})
+	for _, f := range other {
+		moves = append(moves, move{f.rel, quarantine + "/" + otherDir + "/" + f.rel, f.size})
 	}
-	return p
+	return moves
+}
+
+// leaveOut takes files out of the plan before it is applied: every duplicate,
+// and the non-media files whose group (see groupOf) is in groups.
+func (p *plan) leaveOut(duplicates bool, groups map[string]bool) {
+	if duplicates {
+		p.groups = nil
+	}
+	var other []*file
+	for _, f := range p.scan.other {
+		if !groups[groupOf(f)] {
+			other = append(other, f)
+		}
+	}
+	p.scan.other = other
+	p.moves = planMoves(p.groups, other)
 }
 
 // apply moves the files into the quarantine, recording each move in the journal
 // as soon as it is made.
-func (p *plan) apply(out, errOut io.Writer) int {
+func (p *plan) apply(r *reporter) int {
 	if len(p.moves) == 0 {
 		return 0
 	}
-	fmt.Fprintf(out, "Moving %d files to %s/\n", len(p.moves), quarantine)
+	r.printf("Moving %d files to %s/\n", len(p.moves), quarantine)
 	if err := os.MkdirAll(filepath.Join(p.root, quarantine), 0o755); err != nil {
-		fmt.Fprintf(errOut, "  ! cannot create %s: %v\n", quarantine, err)
+		r.warnf("  ! cannot create %s: %v\n", quarantine, err)
 		return 1
 	}
 	journal, err := os.OpenFile(filepath.Join(p.root, quarantine, journalName),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(errOut, "  ! cannot write the journal: %v\n", err)
+		r.warnf("  ! cannot write the journal: %v\n", err)
 		return 1
 	}
 	defer journal.Close()
 	enc := json.NewEncoder(journal) // one unbuffered write per move
 	enc.SetEscapeHTML(false)
 
-	pressed, stop := interrupts()
-	defer stop()
 	p.applied = true
-	for _, m := range p.moves {
-		if pressed() {
-			fmt.Fprintf(errOut, "\ninterrupted after moving %d files, all of them in the journal\n", p.moved)
+	for i, m := range p.moves {
+		if r.stopped() {
+			p.stopped = true
+			r.warnf("\ninterrupted after moving %d files, all of them in the journal\n", p.moved)
 			return 130
 		}
+		r.progress("move", int64(i), int64(len(p.moves)), m.from)
 		src, dst, to := full(p.root, m.from), full(p.root, m.to), m.to
 		err := os.MkdirAll(filepath.Dir(dst), 0o755)
 		if err == nil && exists(dst) {
@@ -101,61 +129,62 @@ func (p *plan) apply(out, errOut io.Writer) int {
 			err = os.Rename(src, dst)
 		}
 		if err != nil {
-			fmt.Fprintf(errOut, "  ! could not move %s: %v\n", src, err)
+			r.warnf("  ! could not move %s: %v\n", src, err)
 			p.failed++
 			continue
 		}
 		if err := enc.Encode(journalEntry{m.from, to}); err != nil {
 			// A move undo cannot see must not happen: put it back and stop.
 			os.Rename(dst, src)
-			fmt.Fprintf(errOut, "  ! cannot write the journal, stopping: %v\n", err)
+			r.warnf("  ! cannot write the journal, stopping: %v\n", err)
 			return 1
 		}
 		p.moved++
+		p.movedBytes += m.size
 		if p.moved%500 == 0 {
-			fmt.Fprintf(out, "  moved %d/%d\n", p.moved, len(p.moves))
+			r.printf("  moved %d/%d\n", p.moved, len(p.moves))
 		}
 	}
+	r.progress("move", int64(len(p.moves)), int64(len(p.moves)), "")
 	if p.failed > 0 {
-		fmt.Fprintf(out, "  moved %d, %d failed\n", p.moved, p.failed)
+		r.printf("  moved %d, %d failed\n", p.moved, p.failed)
 	} else {
-		fmt.Fprintf(out, "  moved %d\n", p.moved)
+		r.printf("  moved %d\n", p.moved)
 	}
 	return 0
 }
 
+type undoResult struct {
+	restored, missing, blocked int
+	stopped                    bool
+}
+
 // undo moves everything in the journal back, newest first. Whatever it cannot
-// put back stays in the journal, so undo can be run again later.
-func undo(root string, out, errOut io.Writer) int {
+// put back stays in the journal, so undo can be run again later. The error
+// wraps fs.ErrNotExist when there is no journal.
+func undo(root string, r *reporter) (undoResult, error) {
+	var res undoResult
 	journal := filepath.Join(root, quarantine, journalName)
 	entries, err := readJournal(journal)
-	if errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(out, "Nothing to undo: %s not found.\n", journal)
-		return 1
-	}
 	if err != nil {
-		fmt.Fprintf(errOut, "cannot read %s: %v\n", journal, err)
-		return 1
+		return res, err
 	}
 
-	pressed, stop := interrupts()
-	defer stop()
 	restored := make([]bool, len(entries))
-	var nRestored, missing, blocked int
-	interrupted := false
 	for i := len(entries) - 1; i >= 0; i-- {
-		if pressed() {
-			interrupted = true
+		if r.stopped() {
+			res.stopped = true
 			break
 		}
+		r.progress("undo", int64(len(entries)-1-i), int64(len(entries)), entries[i].From)
 		src, dst := resolve(root, entries[i].From), resolve(root, entries[i].To)
 		if !exists(dst) {
-			missing++
+			res.missing++
 			continue
 		}
 		if exists(src) {
-			fmt.Fprintf(errOut, "  ! %s exists again, leaving %s in quarantine\n", src, dst)
-			blocked++
+			r.warnf("  ! %s exists again, leaving %s in quarantine\n", src, dst)
+			res.blocked++
 			continue
 		}
 		err := os.MkdirAll(filepath.Dir(src), 0o755)
@@ -163,33 +192,47 @@ func undo(root string, out, errOut io.Writer) int {
 			err = os.Rename(dst, src)
 		}
 		if err != nil {
-			fmt.Fprintf(errOut, "  ! could not restore %s: %v\n", dst, err)
-			blocked++
+			r.warnf("  ! could not restore %s: %v\n", dst, err)
+			res.blocked++
 			continue
 		}
 		restored[i] = true
-		nRestored++
+		res.restored++
 	}
 
 	// clean up the now-empty quarantine skeleton, keeping the reports
 	removeEmptyDirs(filepath.Join(root, quarantine))
-	if nRestored > 0 {
+	if res.restored > 0 {
 		if err := keepUnrestored(journal, entries, restored); err != nil {
-			fmt.Fprintf(errOut, "  ! could not update %s: %v\n", journal, err)
+			r.warnf("  ! could not update %s: %v\n", journal, err)
 		}
 	}
+	return res, nil
+}
 
-	if interrupted {
-		fmt.Fprintln(errOut, "\ninterrupted")
+// undoInTerminal runs undo and reports how it went, for the command line.
+func undoInTerminal(root string, r *reporter) int {
+	journal := filepath.Join(root, quarantine, journalName)
+	res, err := undo(root, r)
+	if errors.Is(err, fs.ErrNotExist) {
+		r.printf("Nothing to undo: %s not found.\n", journal)
+		return 1
 	}
-	fmt.Fprintf(out, "\nrestored %d, already gone %d, left alone %d\n", nRestored, missing, blocked)
-	if blocked > 0 || missing > 0 {
-		fmt.Fprintf(out, "Check %s/ for anything that could not be put back.\n", quarantine)
+	if err != nil {
+		r.warnf("cannot read %s: %v\n", journal, err)
+		return 1
 	}
-	if blocked > 0 {
-		fmt.Fprintln(out, "Those files are still in the journal: undo again once their places are free.")
+	if res.stopped {
+		r.warnf("\ninterrupted\n")
 	}
-	if interrupted {
+	r.printf("\nrestored %d, already gone %d, left alone %d\n", res.restored, res.missing, res.blocked)
+	if res.blocked > 0 || res.missing > 0 {
+		r.printf("Check %s/ for anything that could not be put back.\n", quarantine)
+	}
+	if res.blocked > 0 {
+		r.printf("Those files are still in the journal: undo again once their places are free.\n")
+	}
+	if res.stopped {
 		return 130
 	}
 	return 0

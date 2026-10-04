@@ -5,6 +5,7 @@
 - **Nothing is deleted or renamed.** Every moved file keeps its relative path inside `_Quarantine/`, so you can drag it back by hand or undo the whole run.
 - **Preview first.** Nothing moves until you say so.
 - **Nothing to install.** It is one file for Windows, macOS or Linux. Put it on a USB stick and run it anywhere.
+- **A window to click through,** in your web browser, with progress bars, a review of everything before it moves, and undo.
 
 ## Get it
 
@@ -28,7 +29,14 @@ The programs are not signed with a paid developer certificate, so a copy downloa
 
 ## Usage
 
-**Double-click it.** It asks for the folder (drag the folder into the window and press Enter), shows what it would move, and asks before moving anything. Start it again and choose **Undo** to put everything back.
+**Double-click it.** It opens in your web browser:
+
+1. Choose the folder: click **Choose…**, or paste its location.
+2. **Find duplicates** shows how far it has got, with the file it is on and the time left.
+3. Check what will move: the duplicate groups, with the copy that stays and why, and the files that aren't photos or videos, by type. Untick a type to leave its files where they are, for example `.xmp` sidecars.
+4. **Move** them to `_Quarantine`. Afterwards you can open that folder, or **Undo** everything.
+
+A small window stays open next to the browser while it runs. Closing it, the browser tab, or clicking **Quit** ends the program. Only your own computer can reach the page, and only through the address photo_cleanup opens, which contains a key that is new every time. On Windows you can also drag a folder onto the program to open it with that folder chosen.
 
 **Or use a terminal:**
 
@@ -36,9 +44,21 @@ The programs are not signed with a paid developer certificate, so a copy downloa
 photo_cleanup /path/to/photos            # preview: write reports, move nothing
 photo_cleanup /path/to/photos --apply    # move files into _Quarantine/
 photo_cleanup /path/to/photos --undo     # put everything back
+photo_cleanup --gui /path/to/photos      # the browser window, with this folder chosen
 ```
 
-Use the file name for your computer, for example `photo_cleanup-windows-x64.exe "D:\Photos"` or `./photo_cleanup-macos ~/Pictures`. Read the reports from the preview before running `--apply`.
+Use the file name for your computer, for example `photo_cleanup-windows-x64.exe "D:\Photos"` or `./photo_cleanup-macos ~/Pictures`. Read the reports from the preview before running `--apply`. Ctrl+C stops between two files, so everything moved so far can still be undone.
+
+Without a screen, for example over SSH, starting it without arguments asks for the folder in the terminal instead.
+
+## Moving it around
+
+`photo_cleanup` is a single file with no settings or other files of its own, so you can move, copy or rename it freely: to a USB stick, the desktop, or another computer.
+
+The photo folder can move too. Everything a clean-up records lives inside the folder, in `_Quarantine/`, with paths relative to the folder. You can rename or move the folder, or open the drive on another computer or operating system, and undo still works: just point it at the folder where it is now. Two things to keep:
+
+- Leave `_Quarantine/` inside the folder it was made in, or undo can't find the files.
+- If the program sits inside the folder you clean, keep a name that starts with `photo_cleanup`, so it leaves itself and its copies for other systems alone.
 
 ## What gets moved
 

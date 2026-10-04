@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -51,13 +51,17 @@ var self = func() fs.FileInfo {
 
 // scan walks the folder once: the files of each folder in name order, then
 // its subfolders in name order.
-func scan(root string, errOut io.Writer) scanResult {
+func scan(root string, r *reporter) scanResult {
 	var res scanResult
 	var walk func(dir, rel string)
 	walk = func(dir, rel string) {
+		if r.stopped() {
+			return
+		}
+		r.progress("scan", int64(len(res.media)+len(res.other)), 0, rel)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			fmt.Fprintf(errOut, "  ! cannot read folder %s: %v\n", dir, err)
+			r.warnf("  ! cannot read folder %s: %v\n", dir, err)
 			res.skipped++
 		}
 		var subdirs []string
@@ -156,14 +160,15 @@ func stem(name string) string {
 
 // findDuplicates groups byte-identical files. Only files of the same size are
 // compared, first by their first and last 64 KB, then by a hash of everything.
-func findDuplicates(media []*file, out, errOut io.Writer) []group {
+// It returns nothing when the run is stopped.
+func findDuplicates(media []*file, r *reporter) []group {
 	var sameSize []*file
 	for _, g := range groupBy(media, func(f *file) (int64, bool) { return f.size, true }) {
 		if len(g) > 1 {
 			sameSize = append(sameSize, g...)
 		}
 	}
-	fmt.Fprintf(out, "  %d files share a size with another file; fingerprinting those\n", len(sameSize))
+	r.printf("  %d files share a size with another file; fingerprinting those\n", len(sameSize))
 
 	type quickKey struct {
 		size int64
@@ -171,31 +176,51 @@ func findDuplicates(media []*file, out, errOut io.Writer) []group {
 	}
 	buf := make([]byte, readChunk)
 	var candidates []*file
+	var candidateBytes int64
+	fingerprinted := 0
 	for _, g := range groupBy(sameSize, func(f *file) (quickKey, bool) {
+		if r.stopped() {
+			return quickKey{}, false
+		}
+		r.progress("fingerprint", int64(fingerprinted), int64(len(sameSize)), f.rel)
+		fingerprinted++
 		sum, err := quickFingerprint(f, buf)
 		if err != nil {
-			fmt.Fprintf(errOut, "  ! cannot read %s: %v\n", f.path, err)
+			r.warnf("  ! cannot read %s: %v\n", f.path, err)
 			return quickKey{}, false
 		}
 		return quickKey{f.size, sum}, true
 	}) {
 		if len(g) > 1 {
 			candidates = append(candidates, g...)
+			for _, f := range g {
+				candidateBytes += f.size
+			}
 		}
 	}
 
 	done := 0
+	var hashedBytes int64
 	byHash := groupBy(candidates, func(f *file) ([sha256.Size]byte, bool) {
-		sum, err := fullHash(f, buf)
+		sum, err := fullHash(f, buf, r, func(n int) {
+			hashedBytes += int64(n)
+			r.progress("hash", hashedBytes, candidateBytes, f.rel)
+		})
+		if errors.Is(err, errStopped) {
+			return sum, false
+		}
 		if err != nil {
-			fmt.Fprintf(errOut, "  ! cannot read %s: %v\n", f.path, err)
+			r.warnf("  ! cannot read %s: %v\n", f.path, err)
 		}
 		done++
 		if done%500 == 0 {
-			fmt.Fprintf(out, "  hashed %d/%d\n", done, len(candidates))
+			r.printf("  hashed %d/%d\n", done, len(candidates))
 		}
 		return sum, err == nil
 	})
+	if r.stopped() {
+		return nil
+	}
 
 	var groups []group
 	for _, g := range byHash {
@@ -255,16 +280,33 @@ func quickFingerprint(f *file, buf []byte) (sum [sha256.Size]byte, err error) {
 	return sum, err
 }
 
-func fullHash(f *file, buf []byte) (sum [sha256.Size]byte, err error) {
+var errStopped = errors.New("stopped")
+
+// fullHash hashes the whole file, telling read about every chunk, and gives up
+// with errStopped when the run is stopped.
+func fullHash(f *file, buf []byte, r *reporter, read func(n int)) (sum [sha256.Size]byte, err error) {
 	fh, err := os.Open(f.path)
 	if err != nil {
 		return sum, err
 	}
 	defer fh.Close()
 	h := sha256.New()
-	_, err = io.CopyBuffer(h, struct{ io.Reader }{fh}, buf)
+	for {
+		if r.stopped() {
+			return sum, errStopped
+		}
+		n, err := fh.Read(buf)
+		h.Write(buf[:n])
+		read(n)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return sum, err
+		}
+	}
 	h.Sum(sum[:0])
-	return sum, err
+	return sum, nil
 }
 
 // rank decides which of several identical copies stays: the one that sorts first.
